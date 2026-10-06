@@ -1,0 +1,3 @@
+/build*/
+/linkerdata/codec_bin_section_*.bin
+/tests/*.dSYM/
