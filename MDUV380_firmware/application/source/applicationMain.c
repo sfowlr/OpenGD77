@@ -27,6 +27,8 @@
  *
  */
 
+#include "functions/dmrDataService.h"
+#include "usb/usb_ncm.h"
 #include <hardware/HX8353E.h>
 #include <stdbool.h>
 #include <memory.h>
@@ -425,6 +427,9 @@ void applicationMainTask(void)
 
 	wasRestoringDefaultsettings = settingsLoadSettings(((buttons & BUTTON_SK2) != 0));
 
+	usbNetworkMode = settingsIsOptionBitSet(BIT_USB_NETWORK);
+	MX_USB_DEVICE_Init();
+
 	displayInit(settingsIsOptionBitSet(BIT_INVERSE_VIDEO), true);
 	gpioInitDisplay();
 
@@ -551,6 +556,8 @@ void applicationMainTask(void)
 		keyOrButtonChanged = false;
 
 		tick_com_request();
+		dmrDataServiceTick();
+		usbNcmTick();
 		handleTimerCallbacks();
 		batteryUpdate();
 

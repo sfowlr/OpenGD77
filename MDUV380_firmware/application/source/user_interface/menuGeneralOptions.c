@@ -28,6 +28,9 @@
 
 #include "user_interface/uiGlobals.h"
 #include "user_interface/menuSystem.h"
+#if defined(STM32F405xx)
+#include "usb_device.h"
+#endif
 #include "user_interface/uiLocalisation.h"
 #include "user_interface/uiUtilities.h"
 #include "interfaces/wdog.h"
@@ -58,6 +61,9 @@ enum
 	GENERAL_OPTIONS_TRACKBALL_ENABLED,
 #endif
 	GENERAL_OPTIONS_MENU_HOTSPOT_TYPE,
+#if defined(STM32F405xx)
+	GENERAL_OPTIONS_MENU_USB_MODE,
+#endif
 	GENERAL_OPTIONS_MENU_TEMPERATURE_CALIBRATON,
 	GENERAL_OPTIONS_MENU_BATTERY_CALIBRATON,
 #if !defined(PLATFORM_MD9600) && !defined(PLATFORM_MD380)
@@ -230,6 +236,12 @@ static void updateScreen(bool isFirstRun)
 					}
 #endif
 					break;
+#if defined(STM32F405xx)
+				case GENERAL_OPTIONS_MENU_USB_MODE:
+					leftSide = "USB";// serial port, or network adapter with the serial protocol over UDP
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%s", (settingsIsOptionBitSet(BIT_USB_NETWORK) ? "Network" : "Serial"));
+					break;
+#endif
 				case GENERAL_OPTIONS_MENU_TEMPERATURE_CALIBRATON:
 					{
 						int absValue = abs(nonVolatileSettings.temperatureCalibration);
@@ -340,7 +352,16 @@ static void updateScreen(bool isFirstRun)
 
 				if (!wasPlaying || (menuDataGlobal.newOptionSelected || (menuDataGlobal.menuOptionsTimeout > 0)))
 				{
-					voicePromptsAppendLanguageString(leftSide);
+#if defined(STM32F405xx)
+					if (mNum == GENERAL_OPTIONS_MENU_USB_MODE)
+					{
+						voicePromptsAppendString(leftSide);// not a language string
+					}
+					else
+#endif
+					{
+						voicePromptsAppendLanguageString(leftSide);
+					}
 				}
 
 				if ((rightSideVar[0] != 0) || ((rightSideVar[0] == 0) && (rightSideConst == NULL)))
@@ -547,6 +568,11 @@ static void handleEvent(uiEvent_t *ev)
 					}
 #endif
 					break;
+#if defined(STM32F405xx)
+				case GENERAL_OPTIONS_MENU_USB_MODE:
+					settingsSetOptionBit(BIT_USB_NETWORK, true);
+					break;
+#endif
 				case GENERAL_OPTIONS_MENU_TEMPERATURE_CALIBRATON:
 					if (nonVolatileSettings.temperatureCalibration < 20)
 					{
@@ -685,6 +711,11 @@ static void handleEvent(uiEvent_t *ev)
 					}
 #endif
 					break;
+#if defined(STM32F405xx)
+				case GENERAL_OPTIONS_MENU_USB_MODE:
+					settingsSetOptionBit(BIT_USB_NETWORK, false);
+					break;
+#endif
 				case GENERAL_OPTIONS_MENU_TEMPERATURE_CALIBRATON:
 					if (nonVolatileSettings.temperatureCalibration > -20)
 					{
@@ -810,6 +841,9 @@ static void applySettings(void)
 	settingsSaveIfNeeded(true);
 	resetOriginalSettingsData();
 	rxPowerSavingSetLevel(nonVolatileSettings.ecoLevel);
+#if defined(STM32F405xx)
+	usbDeviceSetNetworkMode(settingsIsOptionBitSet(BIT_USB_NETWORK));// re-enumerates if it changed
+#endif
 #if !defined(PLATFORM_GD77S)
 	ticksTimerStart(&apoTimer, ((nonVolatileSettings.apo * 30) * 60000U));
 	ticksTimerStart(&autolockTimer, (nonVolatileSettings.autolockTimer * 30000U));

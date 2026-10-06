@@ -26,6 +26,8 @@
 #include "usbd_desc.h"
 #include "usbd_cdc.h"
 #include "usbd_cdc_if.h"
+#include "usb/usb_ncm.h"
+#include "functions/ipGateway.h"
 
 /* USER CODE BEGIN Includes */
 
@@ -55,6 +57,30 @@ USBD_HandleTypeDef hUsbDeviceFS;
  * -- Insert your external function declaration here --
  */
 /* USER CODE BEGIN 1 */
+volatile bool usbNetworkMode = false;
+
+// Locally administered MAC addresses from the MCU unique ID: 02:47:44 (G D) for the host, 06:47:44 for the radio
+static void usbNetworkInit(void)
+{
+	const uint32_t *uidWords = (const uint32_t *)UID_BASE;
+	uint32_t uid = uidWords[0] ^ uidWords[1] ^ uidWords[2];
+	uint8_t hostMac[6] = { 0x02, 0x47, 0x44, (uid >> 16) & 0xFF, (uid >> 8) & 0xFF, uid & 0xFF };
+	uint8_t gatewayMac[6] = { 0x06, 0x47, 0x44, (uid >> 16) & 0xFF, (uid >> 8) & 0xFF, uid & 0xFF };
+
+	usbNcmSetMacAddress(hostMac);
+	ipGatewayInit(gatewayMac, hostMac);
+}
+
+void usbDeviceSetNetworkMode(bool network)
+{
+	if (network != usbNetworkMode)
+	{
+		MX_USB_DEVICE_DeInit();
+		usbNetworkMode = network;
+		MX_USB_DEVICE_Init();
+	}
+}
+
 void MX_USB_DEVICE_DeInit(void)
 {
 	if (USBD_Stop(&hUsbDeviceFS) != USBD_OK)
@@ -85,6 +111,17 @@ void MX_USB_DEVICE_Init(void)
   {
     Error_Handler();
   }
+  USBD_FS_SetNetworkMode(usbNetworkMode);
+  if (usbNetworkMode)
+  {
+    usbNetworkInit();
+    if (USBD_RegisterClass(&hUsbDeviceFS, &USBD_NCM) != USBD_OK)
+    {
+      Error_Handler();
+    }
+  }
+  else
+  {
   if (USBD_RegisterClass(&hUsbDeviceFS, &USBD_CDC) != USBD_OK)
   {
     Error_Handler();
@@ -92,6 +129,7 @@ void MX_USB_DEVICE_Init(void)
   if (USBD_CDC_RegisterInterface(&hUsbDeviceFS, &USBD_Interface_fops_FS) != USBD_OK)
   {
     Error_Handler();
+  }
   }
   if (USBD_Start(&hUsbDeviceFS) != USBD_OK)
   {

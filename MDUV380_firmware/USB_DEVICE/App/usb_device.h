@@ -85,6 +85,11 @@ void MX_USB_DEVICE_Init(void);
 
 void MX_USB_DEVICE_DeInit(void);
 
+// Serial port (CDC-ACM) or network adapter (CDC-NCM), see usb/usb_ncm.h. Read by MX_USB_DEVICE_Init()
+extern volatile bool usbNetworkMode;
+// Re-enumerates in the other mode
+void usbDeviceSetNetworkMode(bool network);
+
 /* USER CODE END FD */
 /**
   * @}

@@ -121,6 +121,7 @@ extern USBD_DescriptorsTypeDef FS_Desc;
   */
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
+void USBD_FS_SetNetworkMode(bool network);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 
