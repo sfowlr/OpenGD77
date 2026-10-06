@@ -26,6 +26,7 @@
 #include "usb/usb_ncm.h"
 #include "usb/usb_device_descriptor.h"
 #include "functions/ipGateway.h"
+#include "functions/ticks.h"
 
 // Class specific requests (CDC NCM 1.0 table 6-2, CDC ECM 1.2 table 6)
 #define NCM_SET_ETHERNET_PACKET_FILTER	0x43
@@ -77,7 +78,11 @@ typedef struct
 	uint16_t inSequence;
 	uint32_t ntbInputSize;
 	volatile uint8_t notifyPending;	// notifications still to send after the link comes up
+	volatile bool notifyBusy;		// a notification is on the interrupt endpoint
+	volatile uint32_t notifySentMs;
 } usbNcm_t;
+
+#define NOTIFY_REPEAT_MS	1000	// until the host selects the data alternate setting
 
 static usbNcm_t ncm;
 
@@ -127,6 +132,8 @@ static void sendNotification(uint8_t code)
 	put16(&notification[6], (code == NCM_NOTIFY_SPEED_CHANGE) ? 8 : 0);
 	put32(&notification[8], REPORTED_SPEED);// downlink
 	put32(&notification[12], REPORTED_SPEED);// uplink
+	ncm.notifyBusy = true;
+	ncm.notifySentMs = fw_millis();
 	USB_DeviceSendRequest(ncm.device, USB_NCM_INTERRUPT_IN_ENDPOINT | (USB_IN << 7U), notification,
 							(code == NCM_NOTIFY_SPEED_CHANGE) ? 16 : 8);
 }
@@ -134,6 +141,7 @@ static void sendNotification(uint8_t code)
 // ISR: the speed is announced first, then the connection
 static usb_status_t interruptInCallback(usb_device_handle handle, usb_device_endpoint_callback_message_struct_t *message, void *param)
 {
+	ncm.notifyBusy = false;
 	if (ncm.notifyPending && (ncm.configuration != 0))
 	{
 		ncm.notifyPending = 0;
@@ -406,8 +414,33 @@ bool usbNcmSendFrame(const uint8_t *frame, int length)
 
 // Hands the datagrams of the received NTB to the gateway, one at a time while the IN endpoint is free
 // (each one may need a reply), then re-arms the OUT endpoint
+// The announcement at configuration can be lost (seen at power on with macOS on the STM32 radios, after which macOS
+// waits for it for ever), so it is repeated until the host selects the data alternate setting. Linux and Windows
+// select it first.
+static void repeatNotification(void)
+{
+	if ((ncm.configuration == 0) || (ncm.dataAlternate != 0) || ((fw_millis() - ncm.notifySentMs) < NOTIFY_REPEAT_MS))
+	{
+		return;
+	}
+
+	NVIC_DisableIRQ(USB0_IRQn);
+	if ((ncm.configuration != 0) && (ncm.dataAlternate == 0))
+	{
+		if (ncm.notifyBusy)
+		{
+			USB_DeviceCancel(ncm.device, USB_NCM_INTERRUPT_IN_ENDPOINT | (USB_IN << 7U));// never collected
+		}
+		ncm.notifyPending = 1;
+		sendNotification(NCM_NOTIFY_SPEED_CHANGE);
+	}
+	NVIC_EnableIRQ(USB0_IRQn);
+}
+
 void usbNcmTick(void)
 {
+	repeatNotification();
+
 	if (!ncm.outReady)
 	{
 		return;
