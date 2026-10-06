@@ -11,6 +11,31 @@ The firmware source code does not contain a AMBE codec required for DMR operatio
 This functionality is provided by the official firmware which is merged with the OpenGD77 by the OpenGD77CPS or firmware loader
 
 
+# Branches in this fork
+This fork (sfowlr/OpenGD77) holds two lines of the firmware: the MK22 code from open-ham/OpenGD77, and this newer STM32
+code, which the OpenGD77 developers release only as zip files on opengd77.com.
+
+| Branch | Contents |
+| --- | --- |
+| `main` | open-ham/OpenGD77 unchanged: the MK22 radios (GD-77, GD-77S, DM-1801, RD-5R) |
+| `dmr-packet-data` | `main` plus DMR packet data, a USB network adapter (CDC-NCM) and MMDVM hotspot fixes |
+| `dm1701-main` | the STM32 firmware (MD-UV380 / RT-3S, DM-1701 / RT-84 and others) unchanged, as released on opengd77.com (R20260131, `OpenGD77_MDUV380_DM1701_20260130.zip`) |
+| `dm1701-dmr-packet-data` | `dm1701-main` plus the same DMR data, network adapter and hotspot work |
+
+- The `dm1701-*` branches have their own history, not connected to `main`, so there are no pull requests between the
+  two lines. Compare `dmr-packet-data` with `main`, and `dm1701-dmr-packet-data` with `dm1701-main`.
+- The DMR data and network sources are the same file for file in both lines (`dmrData`, `dmrDataService`,
+  `ipGateway`, `hotspot/dmrDataFrame`, `hotspot/hotspotData`, `usb_ncm.h`); a change to one is made in both.
+- What it adds, protocol by protocol: `docs/dmr_data.md`. The hotspot bug list and the status of each fix:
+  `KNOWN_BUGS.md` (on `dmr-packet-data`).
+- Tested: the STM32 line on a DM-1701, on air. The MK22 line builds and passes the host tests (`make -C firmware/tests`)
+  but hasn't been run on a GD-77 yet.
+- No branch contains the AMBE codec. On the STM32 line `codec_bin_section_1.bin` is a zero filled placeholder; the
+  firmware loader merges the codec in from the official firmware.
+- Building from the command line: `make -C MDUV380_firmware PLATFORM=DM1701` (see the comments at the top of
+  `MDUV380_firmware/Makefile`).
+
+
 # User guide
 
 See https://github.com/LibreDMR/OpenGD77_UserGuide
