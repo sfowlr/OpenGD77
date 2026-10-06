@@ -8,6 +8,9 @@ README).
 - **Hardware:** DM-1701.
 - **Firmware:** `OpenGD77_HS v0.1.18 GitID #UNKNOWN (Radio:DM-1701, Mode:MMDVM)`, built
   from `OpenDM1701_202601_WithOutOfBandPatch.bin`.
+- **Paths:** this list was written against the separate 2022 MK22 and 2026 STM32 trees. On `combined-dmr-packet-data`
+  the hotspot is `firmware/source/functions/hotspot.c` and `MDUV380_firmware/application/source/functions/hotspot.c`,
+  and the shared modules and their tests are in `shared/` (`shared/source/hotspot/hotspotData.c`, `shared/tests`).
 - **Code:** references below are to the MK22 tree, `firmware/source/hotspot/uiHotspot.c`, unless
   noted. The DM-1701 builds from `~/dev2/OpenGD77-MDUV380` (branch `dmr-packet-data`), where the hotspot is
   `MDUV380_firmware/application/source/functions/hotspot.c`. The fixes below are in both trees.

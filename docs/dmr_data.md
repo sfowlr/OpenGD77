@@ -6,17 +6,20 @@ protocol supports.
 
 | Radio | Tree | Notes |
 | --- | --- | --- |
-| GD-77, GD-77S, DM-1801, RD-5R (MK22) | `OpenGD77/firmware` | USB serial and the network adapter together (composite device) |
-| MD-UV380, DM-1701, RT-84 (STM32F405) | `OpenGD77-MDUV380/MDUV380_firmware` | USB serial *or* the network adapter, chosen in the menu |
+| GD-77, GD-77S, DM-1801, DM-1801A, RD-5R (MK22) | `firmware/` | USB serial and the network adapter together (composite device) |
+| MD-UV380, DM-1701, RT-84 (STM32F405) | `MDUV380_firmware/` | USB serial *or* the network adapter, chosen in the menu |
 
-| Piece | Where (MK22 tree; the STM32 tree has the same files under `application/`) |
+The code with no hardware dependencies is in `shared/`, built into both trees; the rest is in each tree (`firmware/` and
+`MDUV380_firmware/application/` have the same layout below them).
+
+| Piece | Where |
 | --- | --- |
-| Packet layer: data headers, Rate 1/2 blocks, CRC-32, preamble CSBKs, IPv4/UDP, Motorola TMS text and ACKs, ETSI response ACK; RX reassembly including confirmed data and compressed UDP/IP headers | `source/functions/dmrData.c` (no hardware dependencies) |
-| Burst engine: one burst per slot on the current timeslot, DMO or through the repeater wakeup, RX classification of data bursts | `source/hardware/HR-C6000.c` (`HRC6000DataTxStart`, `DMR_STATE_DATA_TX_*`) |
-| Service: SMS inbox, automatic TMS / confirmed data ACKs, USB `D` commands, delivery to the network adapter | `source/functions/dmrDataService.c` |
-| Hotspot passthrough between MMDVMHost and RF | `source/hotspot/uiHotspot.c` (STM32: `source/functions/hotspot.c`), `source/hotspot/dmrDataFrame.c` |
-| Network gateway: Ethernet, ARP, IPv4, ICMP, DHCP, UDP | `source/functions/ipGateway.c` (no hardware dependencies) |
-| CDC-NCM USB function | `source/usb/usb_ncm.c` (MK22: KSDK class; STM32: ST USB device class) |
+| Packet layer: data headers, Rate 1/2, 3/4 and 1 blocks, CRC-32, preamble CSBKs, IPv4/UDP, Motorola TMS text and ACKs, ETSI response ACK; RX reassembly including confirmed data and compressed UDP/IP headers | `shared/source/functions/dmrData.c` |
+| Burst engine: one burst per slot on the current timeslot, DMO or through the repeater wakeup, RX classification of data bursts | each tree's `source/hardware/HR-C6000.c` (`HRC6000DataTxStart`, `DMR_STATE_DATA_TX_*`) |
+| Service: SMS inbox, automatic TMS / confirmed data ACKs, USB `D` commands, delivery to the network adapter | `shared/source/functions/dmrDataService.c` |
+| Hotspot passthrough between MMDVMHost and RF | each tree's `source/functions/hotspot.c`; `shared/source/hotspot/hotspotData.c` (the data lists), `shared/source/hotspot/dmrDataFrame.c` (bursts to and from frames) |
+| Network gateway: Ethernet, ARP, IPv4, ICMP, DHCP, UDP | `shared/source/functions/ipGateway.c` |
+| CDC-NCM USB function | each tree's `source/usb/usb_ncm.c` (MK22: KSDK class; STM32: ST USB device class); `shared/include/usb/usb_ncm.h` |
 
 ## Over the air (DMR)
 
@@ -208,7 +211,7 @@ The CPS needs the serial port (on the STM32 radios, serial mode).
 
 ## Host tests
 
-`make -C firmware/tests` builds the packet layer, the hotspot data lists and the network gateway natively and runs
+`make -C shared/tests` builds the packet layer, the hotspot data lists and the network gateway natively and runs
 their tests. The packet test prints the bursts and the 33 byte frames (also Rate 3/4 and Rate 1) so that an independent
 decoder can check them; RadioDesk's decoder agrees on every frame and corrects exactly the same two bit errors as the
 Trellis decoder (421 of 560, hard decision; all single bit errors). The gateway test runs

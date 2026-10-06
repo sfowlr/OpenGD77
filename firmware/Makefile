@@ -54,7 +54,6 @@ $(wildcard ../source/*.c)                   \
 $(wildcard ../source/dmr_codec/*.c)         \
 ../source/dmr_codec/codec_bin.S             \
 $(wildcard ../source/functions/*.c)         \
-$(wildcard ../source/hotspot/*.c)           \
 $(wildcard ../source/hardware/*.c)          \
 $(wildcard ../source/interfaces/*.c)        \
 $(wildcard ../source/io/*.c)                \
@@ -82,6 +81,10 @@ $(filter-out %/heap_1.c %/heap_2.c %/heap_3.c %/heap_5.c, $(wildcard ../amazon-f
 
 ALL_SRC := $(SRC) $(OS_SRC) $(DEVICE_SRC) $(DRIVERS_SRC)
 
+# The DMR packet data and network code shared with the STM32 tree (../../shared), built with -Os
+SHARED_DIR := ../../shared
+SHARED_SRC := $(wildcard $(SHARED_DIR)/source/*/*.c)
+
 ## OPTIMIZE=cproject (the default): -O0 except OS_SOURCES, as the MCUXpresso build. That build links NXP's Redlib,
 ## which isn't part of the GNU Arm toolchain; with newlib-nano the release doesn't fit before the codec, so
 ## OPTIMIZE=size builds everything with -Os except the files that the earlier releases kept at -O0 (timing).
@@ -91,7 +94,7 @@ O0_SOURCES := \
 ../source/SeggerRTT/Syscalls/SEGGER_RTT_Syscalls_GCC.c ../source/firmware.c ../source/functions/sound.c         \
 ../source/hardware/SPI_Flash.c ../source/hardware/UC1701_transfer.c ../source/main.c ../source/semihost_hardfault.c
 
-# Built with -Os, from .cproject (GD-77 configuration), plus the DMR packet data and network code
+# Built with -Os, from .cproject (GD-77 configuration)
 OS_SOURCES := \
 $(wildcard ../usb/device/class/*.c) $(wildcard ../usb/device/source/*.c) $(wildcard ../usb/device/source/khci/*.c) \
 $(OS_SRC) $(wildcard ../source/usb/*.c) $(wildcard ../source/user_interface/*.c) $(wildcard ../device/*.c)         \
@@ -103,10 +106,10 @@ $(addprefix ../source/functions/, aprs.c satellite.c codeplug.c rxPowerSaving.c 
 $(addprefix ../source/io/, LEDs.c keyboard.c buttons.c display.c rotary_switch.c)                                 \
 $(addprefix ../source/hardware/, HR-C6000.c AT1846S.c UC1701.c EEPROM.c)                                          \
 $(addprefix ../drivers/, fsl_common.c fsl_sai_edma.c fsl_i2c.c fsl_ftm.c fsl_clock.c fsl_gpio.c fsl_adc16.c       \
-                         fsl_dac.c fsl_smc.c fsl_wdog.c fsl_dmamux.c fsl_pit.c fsl_edma.c fsl_sai.c)              \
-$(addprefix ../source/functions/, dmrData.c dmrDataService.c ipGateway.c) $(wildcard ../source/hotspot/*.c)
+                         fsl_dac.c fsl_smc.c fsl_wdog.c fsl_dmamux.c fsl_pit.c fsl_edma.c fsl_sai.c)             
 
 INCLUDE_DIRS := \
+-I$(SHARED_DIR)/include \
 -I../board -I../include -I../include/usb -I../source -I../ -I../amazon-freertos/include          \
 -I../amazon-freertos/FreeRTOS/portable -I../drivers -I../device -I../CMSIS -I../usb/device/class \
 -I../usb/device/source -I../usb/device/include -I../usb/device/source/khci                       \
@@ -145,7 +148,8 @@ Q := @
 ECHO := @echo
 endif
 
-OBJ := $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(ALL_SRC))))
+SHARED_OBJ := $(patsubst $(SHARED_DIR)/%.c, $(BUILD_DIR)/shared/%.o, $(SHARED_SRC))
+OBJ := $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(ALL_SRC)))) $(SHARED_OBJ)
 ifeq ("$(OPTIMIZE)","size")
 OS_OBJ := $(addprefix $(BUILD_DIR)/, $(addsuffix .o, $(basename $(filter-out $(O0_SOURCES), $(filter %.c, $(ALL_SRC))))))
 else
@@ -185,6 +189,11 @@ $(BUILD_DIR)/%.o: %.S
 	$(Q)$(MKDIR_P) $(dir $@)
 	$(ECHO) "[AS ] $<"
 	$(Q)$(CC) $(DFLAGS) $(ARCH) -c $< -o $@
+
+$(SHARED_OBJ): $(BUILD_DIR)/shared/%.o: $(SHARED_DIR)/%.c
+	$(Q)$(MKDIR_P) $(dir $@)
+	$(ECHO) "[CCs] $<"
+	$(Q)$(CC) $(DFLAGS) $(CFLAGS) -Os $< -o $@
 
 $(OS_OBJ): $(BUILD_DIR)/%.o: %.c
 	$(Q)$(MKDIR_P) $(dir $@)

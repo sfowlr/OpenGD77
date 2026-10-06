@@ -28,7 +28,10 @@ GITVERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo UNKNOWN)
 DEFS := -DUSE_HAL_DRIVER -DSTM32F405xx $(DEFS_$(PLATFORM)) -DNDEBUG -DDEBUG -DGITVERSION=\"$(GITVERSION)\" \
         $(if $(JAPANESE),-DLANGUAGE_BUILD_JAPANESE)
 
-INCS := Middlewares/Third_Party/FreeRTOS/Source/include application/include \
+# The DMR packet data and network code shared with the MK22 tree
+SHARED_DIR := ../shared
+
+INCS := Middlewares/Third_Party/FreeRTOS/Source/include application/include $(SHARED_DIR)/include \
         Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F USB_DEVICE/Target Drivers/CMSIS/Include Core/Inc \
         Drivers/STM32F4xx_HAL_Driver/Inc Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc USB_DEVICE/App \
         Drivers/CMSIS/Device/ST/STM32F4xx/Include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 \
@@ -44,7 +47,9 @@ LDFLAGS := $(ARCH) -T STM32F405VGTX_FLASH.ld --specs=nosys.specs --specs=nano.sp
 
 SRCDIRS := SeggerRTT application Core Middlewares Drivers USB_DEVICE
 SOURCES := $(filter-out %/languages_builder.c,$(shell find $(SRCDIRS) -name '*.c' -o -name '*.s' -o -name '*.S'))
-OBJS    := $(addprefix $(BUILD)/,$(addsuffix .o,$(basename $(SOURCES))))
+SHARED_SOURCES := $(wildcard $(SHARED_DIR)/source/*/*.c)
+SHARED_OBJS     := $(patsubst $(SHARED_DIR)/%.c,$(BUILD)/shared/%.o,$(SHARED_SOURCES))
+OBJS    := $(addprefix $(BUILD)/,$(addsuffix .o,$(basename $(SOURCES)))) $(SHARED_OBJS)
 
 CODEC_PLACEHOLDER := application/source/linkerdata/codec_bin_section_1.bin
 CODEC_ADDRESS     := 0x0807537C
@@ -55,6 +60,10 @@ all: $(BUILD)/firmware.elf $(BUILD)/firmware.bin
 
 $(CODEC_PLACEHOLDER):
 	python3 -c "open('$@', 'wb').write(bytes(0x48BB0))"
+
+$(SHARED_OBJS): $(BUILD)/shared/%.o: $(SHARED_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
