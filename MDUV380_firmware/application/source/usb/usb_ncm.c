@@ -21,6 +21,7 @@
 #include "usb/usb_ncm.h"
 #include "functions/ipGateway.h"
 #include "functions/ticks.h"
+#include "usb_device.h"
 
 #define NCM_COMM_INTERFACE				0
 #define NCM_DATA_INTERFACE				1
@@ -131,6 +132,16 @@ typedef struct
 
 #define NOTIFY_REPEAT_MS	1000	// until the host selects the data alternate setting
 
+// The host configured the device but never selected the data interface. Seen with macOS after a power on, where the
+// announcement doesn't get through even when it is repeated; re-enumerating (what switching the USB mode to serial
+// and back does) fixes it. Linux and Windows select it straight away.
+#define REENUMERATE_AFTER_MS	5000
+#define REENUMERATE_GAP_MS		200		// disconnected long enough for the host to see it
+#define REENUMERATE_MAX			2
+static volatile uint32_t configuredMs;
+static uint8_t reenumerations = 0;
+static uint32_t restartAtMs = 0;		// 0: no restart pending
+
 static usbNcm_t ncm;
 static USBD_HandleTypeDef *ncmDevice;
 
@@ -236,6 +247,7 @@ static uint8_t ncmInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
 	pdev->ep_in[NCM_NOTIFY_EP & 0x0F].is_used = 1;
 	pdev->ep_in[NCM_NOTIFY_EP & 0x0F].bInterval = NCM_NOTIFY_INTERVAL;
 	ncm.configured = true;
+	configuredMs = ticksGetMillis();
 
 	// macOS only selects the data alternate setting once the link is reported up, Linux and Windows select it first.
 	// So the speed and the connection are announced now, and again when alternate 1 is selected.
@@ -551,8 +563,37 @@ static void repeatNotification(void)
 	HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
 }
 
+static void reenumerateIfStuck(void)
+{
+	uint32_t now = ticksGetMillis();
+
+	if (restartAtMs != 0)
+	{
+		if ((int32_t)(now - restartAtMs) >= 0)
+		{
+			restartAtMs = 0;
+			MX_USB_DEVICE_Init();
+		}
+		return;
+	}
+
+	if (ncm.configured && (ncm.dataAlternate == 0) && (reenumerations < REENUMERATE_MAX) &&
+			((now - configuredMs) > REENUMERATE_AFTER_MS))
+	{
+		reenumerations++;
+		MX_USB_DEVICE_DeInit();
+		ncm.configured = false;
+		restartAtMs = now + REENUMERATE_GAP_MS;
+		if (restartAtMs == 0)
+		{
+			restartAtMs = 1;
+		}
+	}
+}
+
 void usbNcmTick(void)
 {
+	reenumerateIfStuck();
 	repeatNotification();
 
 	if (!ncm.outReady)
