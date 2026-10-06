@@ -174,7 +174,7 @@ static void handleARP(const uint8_t *frame, const uint8_t *arp)
 	{
 		return;
 	}
-#if IPGW_POINT_TO_POINT
+#if (IPGW_LINK_PREFIX == 31)
 	if (targetIp != ipGatewayRadioIP())
 	{
 		return;// everything else is routed through the radio
@@ -223,7 +223,8 @@ static uint8_t *putRoute(uint8_t *o, uint32_t network, int prefix, uint32_t rout
 	return o + 4;
 }
 
-// Classless static routes (option 121, and 249 for older Windows) through the radio: on a /31 the individual range,
+// Classless static routes (option 121, and 249 for older Windows) through the radio: on a /32 the radio itself on the
+// link (router 0.0.0.0) first, on a /31 or /32 the individual range,
 // the multicast range, so that sending to and joining a talkgroup picks this link, and the group range if it isn't on
 // the link
 static uint8_t *putRoutes(uint8_t *o, uint8_t code, uint32_t router)
@@ -232,6 +233,9 @@ static uint8_t *putRoutes(uint8_t *o, uint8_t code, uint32_t router)
 
 	*o++ = code;
 	start = o++;
+#if (IPGW_LINK_PREFIX == 32)
+	o = putRoute(o, router, 32, 0);
+#endif
 #if IPGW_POINT_TO_POINT
 	o = putRoute(o, IPGW_INDIVIDUAL_NET, IPGW_INDIVIDUAL_PREFIX, router);
 #endif

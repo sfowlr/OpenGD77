@@ -172,23 +172,33 @@ static void testDHCP(uint8_t type, uint32_t requested, uint8_t expectedReply)
 	CHECK(RADIO_IP == (IPGW_POINT_TO_POINT ? (HOST_IP ^ 1) : (IPGW_ALL_CALL_IP - 1)));
 	o = dhcpOption(r, rlen, 54);
 	CHECK(o && get32(&o[2]) == RADIO_IP);
-	// The multicast range through the radio, on a /31 also the individual range; the group range is on the link
+	// The multicast range through the radio, on a /31 or /32 also the individual range, on a /32 first the radio itself
+	// on the link; the group range is on the link
 	o = dhcpOption(r, rlen, 121);
 	CHECK(o != NULL);
 	int routes = 0;
-	bool multicast = false, individual = false;
+	bool multicast = false, individual = false, onLink = false;
 	for (int i = 2; o && i < 2 + o[1];)
 	{
 		int prefix = o[i], octets = (prefix + 7) / 8;
 		uint32_t net = 0;
 		for (int k = 0; k < octets; k++) net |= (uint32_t)o[i + 1 + k] << (24 - 8 * k);
-		CHECK(get32(&o[i + 1 + octets]) == RADIO_IP);
+		uint32_t router = get32(&o[i + 1 + octets]);
+		if ((routes == 0) && (IPGW_LINK_PREFIX == 32))
+		{
+			onLink = (prefix == 32) && (net == RADIO_IP) && (router == 0);
+		}
+		else
+		{
+			CHECK(router == RADIO_IP);
+		}
 		multicast |= (prefix == IPGW_MULTICAST_PREFIX) && (net == IPGW_MULTICAST_NET);
 		individual |= (prefix == IPGW_INDIVIDUAL_PREFIX) && (net == IPGW_INDIVIDUAL_NET);
 		i += 1 + octets + 4;
 		routes++;
 	}
-	CHECK(multicast && (individual == IPGW_POINT_TO_POINT) && routes == (IPGW_POINT_TO_POINT ? 2 : 1));
+	CHECK(multicast && (individual == IPGW_POINT_TO_POINT) && (onLink == (IPGW_LINK_PREFIX == 32)));
+	CHECK(routes == (1 + IPGW_POINT_TO_POINT + (IPGW_LINK_PREFIX == 32)));
 	const uint8_t *o249 = dhcpOption(r, rlen, 249);
 	CHECK(o && o249 && o249[1] == o[1] && memcmp(&o249[2], &o[2], o[1]) == 0);
 	CHECK(dhcpOption(r, rlen, 3) == NULL);// no default route
@@ -217,7 +227,7 @@ static void testARP(void)
 	memcpy(f + 14, a, 28);
 
 	in(f, 42);
-#if IPGW_POINT_TO_POINT
+#if (IPGW_LINK_PREFIX == 31)
 	CHECK(framesSent == 0);// routed through the radio, so no proxy ARP
 
 	put32(&f[38], RADIO_IP);
@@ -226,7 +236,7 @@ static void testARP(void)
 	CHECK(framesSent == 1);
 	CHECK(lastFrame[21] == 2);// reply
 	CHECK(memcmp(&lastFrame[22], GW_MAC, 6) == 0);
-	CHECK(get32(&lastFrame[28]) == (IPGW_POINT_TO_POINT ? RADIO_IP : (IPGW_INDIVIDUAL_NET | 9)));
+	CHECK(get32(&lastFrame[28]) == ((IPGW_LINK_PREFIX == 31) ? RADIO_IP : (IPGW_INDIVIDUAL_NET | 9)));
 
 	// Address conflict probe (sender 0.0.0.0) for the host's own address: no reply
 	memset(f + 28, 0, 4);

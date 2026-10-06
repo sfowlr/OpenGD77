@@ -30,12 +30,16 @@
 //                                      the Motorola CAI addresses (12.x.y.z, 225.x.y.z), see dmrData.c
 //   multicast    225.0.0.0/8           talkgroups, both ways: send to 225.x.y.z for talkgroup x.y.z, and group data
 //                                      received over the air arrives there (join the group on the radio's interface)
-//   link         /31 (default)         the host and the radio only: the host is 11.<ID>, the radio the other address of
-//                                      the pair (11.<ID> xor 1), and option 121 routes the individual, multicast (and
-//                                      group) ranges through the radio. Each radio has an address of its own, so
-//                                      several radios can be plugged into one host. The radio answers at that address
-//                                      for ping, DHCP and IPGW_SERIAL_PORT only, anything else to it goes over the
-//                                      air to the radio with that ID.
+//   link         /32 (default)         the host alone: the host is 11.<ID>/32, the radio is 11.<ID> xor 1, and option
+//                                      121 has a route to the radio on the link (router 0.0.0.0) and routes the
+//                                      individual, multicast (and group) ranges through the radio. Each radio has an
+//                                      address of its own, so several radios can be plugged into one host. The radio
+//                                      answers at that address for ping, DHCP and IPGW_SERIAL_PORT only, anything else
+//                                      to it goes over the air to the radio with that ID. The radio answers ARP for
+//                                      every address but the host's, in case the host ignores the on link route.
+//                or /31                the same with the host and the radio as a /31 (RFC 3021), the radio answering
+//                                      ARP for its own address only. macOS treats both ends of a /31 as broadcast
+//                                      addresses, so sending to the radio needs SO_BROADCAST there.
 //                or /1 to the individual prefix, holding the individual range (e.g. IPGW_LINK_PREFIX 8), for hosts
 //                                      that can't use a /31: every radio is on the link and the radio itself is the
 //                                      top individual address but one (11.255.255.254), so that ID can't be used. One
@@ -46,7 +50,7 @@
 //                                      Define IPGW_GROUP_NET and IPGW_GROUP_PREFIX to have it.
 // The top individual address (11.255.255.255) is the all call (16777215), for the DMR application ports 4000-4099
 // only; as are 255.255.255.255 and, on a shared link, the subnet broadcast. Received all calls and monitor records go
-// to the host's broadcast address: the subnet broadcast on a shared link, 255.255.255.255 on a /31.
+// to the host's broadcast address: the subnet broadcast on a shared link, 255.255.255.255 on a /31 or /32.
 #ifndef IPGW_INDIVIDUAL_NET
 #define IPGW_INDIVIDUAL_NET		0x0B000000u		// 11.0.0.0
 #define IPGW_INDIVIDUAL_PREFIX	8
@@ -56,12 +60,12 @@
 #define IPGW_MULTICAST_PREFIX	8
 #endif
 #ifndef IPGW_LINK_PREFIX
-#define IPGW_LINK_PREFIX		31
+#define IPGW_LINK_PREFIX		32
 #endif
 
 #define IPGW_MASK(prefix)		(0xFFFFFFFFu << (32 - (prefix)))
 #define IPGW_NETMASK			IPGW_MASK(IPGW_LINK_PREFIX)
-#define IPGW_POINT_TO_POINT		(IPGW_LINK_PREFIX == 31)
+#define IPGW_POINT_TO_POINT		(IPGW_LINK_PREFIX >= 31)
 #define IPGW_ALL_CALL_IP		(IPGW_INDIVIDUAL_NET | ~IPGW_MASK(IPGW_INDIVIDUAL_PREFIX))
 #define IPGW_SHARED_RADIO_IP	(IPGW_ALL_CALL_IP - 1)	// the radio on a shared link
 #if IPGW_POINT_TO_POINT
@@ -76,8 +80,8 @@ _Static_assert((IPGW_INDIVIDUAL_PREFIX >= 8) && (IPGW_INDIVIDUAL_PREFIX <= 24) &
 #if defined(IPGW_GROUP_NET)
 _Static_assert((IPGW_GROUP_PREFIX >= 8) && (IPGW_GROUP_PREFIX <= 24), "address ranges must be /8 to /24");
 #endif
-_Static_assert(IPGW_POINT_TO_POINT || ((IPGW_LINK_PREFIX >= 1) && (IPGW_LINK_PREFIX <= IPGW_INDIVIDUAL_PREFIX) &&
-				((IPGW_SHARED_RADIO_IP & IPGW_NETMASK) == (IPGW_INDIVIDUAL_NET & IPGW_NETMASK))), "the link must be a /31 or hold the individual range");
+_Static_assert(((IPGW_LINK_PREFIX <= 32) && IPGW_POINT_TO_POINT) || ((IPGW_LINK_PREFIX >= 1) && (IPGW_LINK_PREFIX <= IPGW_INDIVIDUAL_PREFIX) &&
+				((IPGW_SHARED_RADIO_IP & IPGW_NETMASK) == (IPGW_INDIVIDUAL_NET & IPGW_NETMASK))), "the link must be a /31, a /32 or hold the individual range");
 _Static_assert((IPGW_MULTICAST_NET >> 28) == 0xE, "the multicast range must be in 224.0.0.0/4");
 
 // Every data burst received over the air also goes to the host, as a UDP broadcast from the radio to this port:
