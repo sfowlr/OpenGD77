@@ -55,17 +55,27 @@ at compile time in `ipGateway.h` (each a base and a /8 to /24 prefix; the low bi
 | --- | --- | --- |
 | Individual | 11.0.0.0/8 | DMR IDs. DHCP gives the host its own radio's ID: radio 10005 gives 11.0.39.21 (10.250.39.21 with 10.250.0.0/16) |
 | Multicast | 225.0.0.0/8 | Talkgroups both ways: send to 225.x.y.z, and group data received over the air arrives there (join the group on the radio's interface) |
-| Link | 11.0.0.0/8 | The host's subnet, it holds the individual range |
-| Group (optional) | none | A unicast range for sending to talkgroups, e.g. 10.251.0.0/16 next to 10.250.0.0/16 with a /15 link, for hosts that ignore the multicast route |
+| Link | /31 | The host and the radio only: the host is 11.<ID>, the radio the other address of the pair (11.<ID> xor 1, 11.0.39.20 for radio 10005) |
+| Group (optional) | none | A unicast range for sending to talkgroups, e.g. 10.251.0.0/16 next to 10.250.0.0/16, for hosts that ignore the multicast route |
 
 - IDs bigger than a range are truncated to its low bits. In a /16, radio 0x010203 gets 10.250.2.3, and its host also
   gets the data sent over the air to radio 0x0203; sending to 10.250.2.3 reaches radio 0x0203. Overlaps are possible
   but unlikely, since high IDs are sparse. The radio itself still only acknowledges data to its full ID.
-- Every radio is on the link. Option 121/249 adds only the route for the multicast range (and the optional group
-  range when it isn't on the link), with no default route, so the host's other traffic is unaffected.
-- The radio itself is the top individual address but one (11.255.255.254). The subnet broadcast (11.255.255.255) is
-  the all call, for UDP ports 4000-4099 only, so that the host's own broadcasts (NetBIOS, discovery, LAN sync) never
-  key the radio. The gateway only sends what has the host's own source address over the air.
+- Option 121/249 routes the individual range, the multicast range and the optional group range through the radio,
+  with no default route, so the host's other traffic is unaffected. The radio answers ARP for its own address only.
+- Each radio has an address of its own, so several radios can be plugged into one host and each one's UDP port 3334
+  is reachable. They all route the same ranges though, so the host sends all its DMR traffic through one of them
+  (bind to a radio's interface to choose).
+- The radio's address is also the address of radio ID xor 1. The radio itself only answers ping, DHCP and UDP port
+  3334 there; anything else sent to it goes over the air to radio ID xor 1, and data from that radio arrives from it.
+- `-DIPGW_LINK_PREFIX=8` (any prefix up to the individual one) gives the older shared link instead, for hosts that
+  can't use a /31 (Windows may not): every radio is on the link, the radio is 11.255.255.254 (that ID can't be used),
+  the radio answers ARP for every address but the host's, and only the multicast range (and an off link group range)
+  is routed. One radio per host.
+- The top individual address (11.255.255.255) is the all call, as is 255.255.255.255 (and the subnet broadcast on a
+  shared link), for UDP ports 4000-4099 only, so that the host's own broadcasts (NetBIOS, discovery, LAN sync) never
+  key the radio. Received all calls and monitor records go to 255.255.255.255 (the subnet broadcast on a shared
+  link). The gateway only sends what has the host's own source address over the air.
 - The lease is 10 minutes. If the radio's DMR ID changes, the renewal is refused and the host gets the new address.
 - Every IP packet received over the air goes to the host, from the source's individual address (over the air the
   packets use the Motorola CAI addresses 12.x.y.z / 225.x.y.z, the gateway translates). Data between two

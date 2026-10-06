@@ -23,17 +23,22 @@ IPGW16  := -DIPGW_INDIVIDUAL_NET=0x0AFA0000u -DIPGW_INDIVIDUAL_PREFIX=16 -DIPGW_
 ipGatewayTest16: ipGatewayTest.c ../source/functions/ipGateway.c ../include/functions/ipGateway.h
 	$(CC) $(CFLAGS) $(IPGW16) -o $@ ipGatewayTest.c ../source/functions/ipGateway.c
 
-run: dmrDataTest ipGatewayTest ipGatewayTest16
+# The default ranges on a shared /8 link instead of the /31
+ipGatewayTestShared: ipGatewayTest.c ../source/functions/ipGateway.c ../include/functions/ipGateway.h
+	$(CC) $(CFLAGS) -DIPGW_LINK_PREFIX=8 '-DPCAP_NAME="ipGatewayTestShared.pcap"' -o $@ ipGatewayTest.c ../source/functions/ipGateway.c
+
+run: dmrDataTest ipGatewayTest ipGatewayTest16 ipGatewayTestShared
 	./dmrDataTest > dmrDataTest.out; status=$$?; grep -E "^(FAIL|# (PASSED|FAILED))" dmrDataTest.out; exit $$status
 	./ipGatewayTest
 	./ipGatewayTest16
+	./ipGatewayTestShared
 ifneq ($(TSHARK),)
 	@# Independent check of the frames the gateway sent: no malformed packets or bad checksums
-	@for f in ipGatewayTest.pcap ipGatewayTest16.pcap; do "$(TSHARK)" -r $$f -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -z expert,note -q; done > ipGatewayTest.expert
+	@for f in ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTestShared.pcap; do "$(TSHARK)" -r $$f -o ip.check_checksum:TRUE -o udp.check_checksum:TRUE -z expert,note -q; done > ipGatewayTest.expert
 	@if grep -q -i -E "malformed|bad|incorrect|error" ipGatewayTest.expert; then echo "# tshark found problems"; cat ipGatewayTest.expert; exit 1; else echo "# tshark: no malformed packets or bad checksums"; fi
 endif
 
 clean:
-	rm -f dmrDataTest dmrDataTest.out ipGatewayTest ipGatewayTest16 ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTest.expert
+	rm -f dmrDataTest dmrDataTest.out ipGatewayTest ipGatewayTest16 ipGatewayTestShared ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTestShared.pcap ipGatewayTest.expert
 
 .PHONY: all run clean

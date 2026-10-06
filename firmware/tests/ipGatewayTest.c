@@ -18,7 +18,8 @@ static const uint8_t BCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 static const uint8_t HOST_MAC[6] = { 0x02, 0x47, 0x44, 0x37, 0x37, 0x02 };
 
 #define RADIO_ID		10005
-#define HOST_IP			(IPGW_INDIVIDUAL_NET | RADIO_ID)		// 12.0.39.21 with the default ranges
+#define HOST_IP			(IPGW_INDIVIDUAL_NET | RADIO_ID)		// 11.0.39.21 with the default ranges
+#define RADIO_IP		ipGatewayRadioIP()
 
 #define FITS_INDIVIDUAL(id)	(((id) & IPGW_MASK(IPGW_INDIVIDUAL_PREFIX)) == 0)
 
@@ -168,10 +169,28 @@ static void testDHCP(uint8_t type, uint32_t requested, uint8_t expectedReply)
 	CHECK(get32(&r[16]) == HOST_IP);
 	o = dhcpOption(r, rlen, 1);
 	CHECK(o && get32(&o[2]) == IPGW_NETMASK);
-	o = dhcpOption(r, rlen, 121);// the multicast range only, the group range is on the link
-	int octets = (IPGW_MULTICAST_PREFIX + 7) / 8;
-	CHECK(o && o[1] == 1 + octets + 4 && o[2] == IPGW_MULTICAST_PREFIX && get32(&o[3]) >> (32 - 8 * octets) == IPGW_MULTICAST_NET >> (32 - 8 * octets));
-	CHECK(o && get32(&o[3 + octets]) == IPGW_GATEWAY_IP);
+	CHECK(RADIO_IP == (IPGW_POINT_TO_POINT ? (HOST_IP ^ 1) : (IPGW_ALL_CALL_IP - 1)));
+	o = dhcpOption(r, rlen, 54);
+	CHECK(o && get32(&o[2]) == RADIO_IP);
+	// The multicast range through the radio, on a /31 also the individual range; the group range is on the link
+	o = dhcpOption(r, rlen, 121);
+	CHECK(o != NULL);
+	int routes = 0;
+	bool multicast = false, individual = false;
+	for (int i = 2; o && i < 2 + o[1];)
+	{
+		int prefix = o[i], octets = (prefix + 7) / 8;
+		uint32_t net = 0;
+		for (int k = 0; k < octets; k++) net |= (uint32_t)o[i + 1 + k] << (24 - 8 * k);
+		CHECK(get32(&o[i + 1 + octets]) == RADIO_IP);
+		multicast |= (prefix == IPGW_MULTICAST_PREFIX) && (net == IPGW_MULTICAST_NET);
+		individual |= (prefix == IPGW_INDIVIDUAL_PREFIX) && (net == IPGW_INDIVIDUAL_NET);
+		i += 1 + octets + 4;
+		routes++;
+	}
+	CHECK(multicast && (individual == IPGW_POINT_TO_POINT) && routes == (IPGW_POINT_TO_POINT ? 2 : 1));
+	const uint8_t *o249 = dhcpOption(r, rlen, 249);
+	CHECK(o && o249 && o249[1] == o[1] && memcmp(&o249[2], &o[2], o[1]) == 0);
 	CHECK(dhcpOption(r, rlen, 3) == NULL);// no default route
 }
 
@@ -198,10 +217,16 @@ static void testARP(void)
 	memcpy(f + 14, a, 28);
 
 	in(f, 42);
+#if IPGW_POINT_TO_POINT
+	CHECK(framesSent == 0);// routed through the radio, so no proxy ARP
+
+	put32(&f[38], RADIO_IP);
+	in(f, 42);
+#endif
 	CHECK(framesSent == 1);
 	CHECK(lastFrame[21] == 2);// reply
 	CHECK(memcmp(&lastFrame[22], GW_MAC, 6) == 0);
-	CHECK(get32(&lastFrame[28]) == (IPGW_INDIVIDUAL_NET | 9));
+	CHECK(get32(&lastFrame[28]) == (IPGW_POINT_TO_POINT ? RADIO_IP : (IPGW_INDIVIDUAL_NET | 9)));
 
 	// Address conflict probe (sender 0.0.0.0) for the host's own address: no reply
 	memset(f + 28, 0, 4);
@@ -218,7 +243,7 @@ static void testPing(void)
 	memset(ip, 0, 20);
 	ip[0] = 0x45; ip[3] = 20 + 16; ip[8] = 64; ip[9] = 1;
 	put32(&ip[12], HOST_IP);
-	put32(&ip[16], IPGW_GATEWAY_IP);
+	put32(&ip[16], RADIO_IP);
 	uint16_t c = sum16(ip, 20, 0); ip[10] = c >> 8; ip[11] = c;
 	memset(ic, 0, 16); ic[0] = 8; ic[5] = 1; ic[7] = 1; memcpy(ic + 8, "gd77ping", 8);
 	c = sum16(ic, 16, 0); ic[2] = c >> 8; ic[3] = c;
@@ -250,21 +275,32 @@ static void testToAir(void)
 	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_MULTICAST_NET | 10, 5000, 4007, lrrp, 4));// to 225.0.0.10
 	CHECK(air.calls == 3 && air.group && air.dst == 10);
 
-	in(f, hostUdp(f, BCAST_MAC, HOST_IP, IPGW_BROADCAST_IP, 4005, 4005, lrrp, 4));// subnet broadcast: all call
+	in(f, hostUdp(f, BCAST_MAC, HOST_IP, IPGW_BROADCAST_IP, 4005, 4005, lrrp, 4));// broadcast: all call
 	CHECK(air.calls == 4 && air.group && air.dst == 0xFFFFFF);
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_ALL_CALL_IP, 4005, 4005, lrrp, 4));// the top individual address: all call
+	CHECK(air.calls == 5 && air.group && air.dst == 0xFFFFFF);
+
+#if IPGW_POINT_TO_POINT
+	// On a /31 the radio's address is also the radio with the host's ID xor 1, for anything but the serial port
+	in(f, hostUdp(f, GW_MAC, HOST_IP, RADIO_IP, 4001, 4001, lrrp, 4));
+	CHECK(air.calls == 6 && !air.group && air.dst == (RADIO_ID ^ 1));
+	air.calls = 5;
+#endif
 
 	in(f, hostUdp(f, BCAST_MAC, HOST_IP, IPGW_BROADCAST_IP, 137, 137, lrrp, 4));// NetBIOS broadcast: dropped
 	in(f, hostUdp(f, BCAST_MAC, HOST_IP, 0xFFFFFFFF, 17500, 17500, lrrp, 4));// LAN sync broadcast: dropped
 	in(f, hostUdp(f, GW_MAC, HOST_IP, 0x08080808, 53, 53, lrrp, 4));// elsewhere: dropped
-	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GATEWAY_IP, 4001, 4001, lrrp, 4));// to the radio itself: dropped
+#if !IPGW_POINT_TO_POINT
+	in(f, hostUdp(f, GW_MAC, HOST_IP, RADIO_IP, 4001, 4001, lrrp, 4));// to the radio itself: dropped
+#endif
 	in(f, hostUdp(f, GW_MAC, IPGW_INDIVIDUAL_NET | 235, IPGW_INDIVIDUAL_NET | 236, 4001, 4001, lrrp, 4));// not from the host (forwarded): dropped
-	CHECK(air.calls == 4 && framesSent == 0);
+	CHECK(air.calls == 5 && framesSent == 0);
 
 	// Corrupt IP header checksum: dropped
 	int n = hostUdp(f, GW_MAC, HOST_IP, IPGW_INDIVIDUAL_NET | 235, 4001, 4001, lrrp, 4);
 	f[24] ^= 0x01;
 	in(f, n);
-	CHECK(air.calls == 4);
+	CHECK(air.calls == 5);
 }
 
 static void testDeliver(void)
@@ -291,6 +327,9 @@ static void testDeliver(void)
 	CHECK((memcmp(lastFrame, HOST_MAC, 6) == 0) == !FITS_INDIVIDUAL(0x010000));// in a /8 it's another radio
 	CHECK(get32(&lastFrame[26]) == (IPGW_INDIVIDUAL_NET | (0x123456 & ~IPGW_MASK(IPGW_INDIVIDUAL_PREFIX))));
 
+	CHECK(ipGatewayDeliverUDP(false, RADIO_ID, RADIO_ID ^ 1, 4001, 4001, report, sizeof(report)));
+	CHECK((get32(&lastFrame[26]) == (IPGW_INDIVIDUAL_NET | (RADIO_ID ^ 1))) && (IPGW_POINT_TO_POINT == (get32(&lastFrame[26]) == RADIO_IP)));
+
 	CHECK(ipGatewayDeliverUDP(true, 0xFFFFFF, 235, 4007, 4007, report, sizeof(report)));// all call
 	CHECK(memcmp(lastFrame, BCAST_MAC, 6) == 0);
 	CHECK(get32(&lastFrame[30]) == IPGW_BROADCAST_IP);
@@ -298,7 +337,7 @@ static void testDeliver(void)
 	const uint8_t record[] = { 1, 1, 1, 6, 0, 3, 0xBD, 0x00, 0x80 };
 	CHECK(ipGatewayDeliverMonitor(record, sizeof(record)));
 	CHECK(memcmp(lastFrame, BCAST_MAC, 6) == 0);
-	CHECK(get32(&lastFrame[26]) == IPGW_GATEWAY_IP && get32(&lastFrame[30]) == IPGW_BROADCAST_IP);
+	CHECK(get32(&lastFrame[26]) == RADIO_IP && get32(&lastFrame[30]) == IPGW_BROADCAST_IP);
 	CHECK(lastFrame[36] == (IPGW_MONITOR_PORT >> 8) && lastFrame[37] == (IPGW_MONITOR_PORT & 0xFF));
 }
 
@@ -309,18 +348,18 @@ static void testSerial(void)
 	const uint8_t getVersion[] = { 0xE0, 0x03, 0x00 };
 
 	CHECK(ipGatewaySerialOut(getVersion, 3));// nobody to send to yet: dropped, not busy
-	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GATEWAY_IP, 3335, IPGW_SERIAL_PORT, getVersion, sizeof(getVersion)));
+	in(f, hostUdp(f, GW_MAC, HOST_IP, RADIO_IP, 3335, IPGW_SERIAL_PORT, getVersion, sizeof(getVersion)));
 	CHECK(serial.calls == 1 && serial.length == 3 && memcmp(serial.data, getVersion, 3) == 0);
-	CHECK(framesSent == 0 && air.calls == 4);// not over the air
+	CHECK(framesSent == 0 && air.calls == 5);// not over the air
 
 	const uint8_t reply[] = { 0xE0, 0x04, 0x70, 0x00 };
 	CHECK(ipGatewaySerialOut(reply, sizeof(reply)));
-	CHECK(get32(&lastFrame[26]) == IPGW_GATEWAY_IP && get32(&lastFrame[30]) == HOST_IP);
+	CHECK(get32(&lastFrame[26]) == RADIO_IP && get32(&lastFrame[30]) == HOST_IP);
 	CHECK(lastFrame[34] == (IPGW_SERIAL_PORT >> 8) && lastFrame[35] == (IPGW_SERIAL_PORT & 0xFF));
 	CHECK(lastFrame[36] == (3335 >> 8) && lastFrame[37] == (3335 & 0xFF));
 	CHECK(memcmp(&lastFrame[42], reply, sizeof(reply)) == 0);
 
-	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GATEWAY_IP, 3335, 4001, getVersion, sizeof(getVersion)));// other ports: nothing
+	in(f, hostUdp(f, GW_MAC, HOST_IP, RADIO_IP, 3335, 4001, getVersion, sizeof(getVersion)));// other ports: not serial
 	CHECK(serial.calls == 1 && framesSent == 0);
 }
 
@@ -336,7 +375,8 @@ static void testIdChange(void)
 	}
 
 	radioId = 200;
-	testDHCP(3, HOST_IP, 6);// renewing 12.0.39.21 is refused
+	testDHCP(3, HOST_IP, 6);// renewing 11.0.39.21 is refused
+	CHECK(RADIO_IP == (IPGW_POINT_TO_POINT ? (IPGW_INDIVIDUAL_NET | 201) : (IPGW_ALL_CALL_IP - 1)));
 	radioId = RADIO_ID;
 }
 
