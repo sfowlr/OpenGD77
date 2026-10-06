@@ -2719,9 +2719,16 @@ static uint8_t setFreq(const uint8_t *data, uint8_t length)
 		return 4;// invalid frequency
 	}
 
-	hotspotFreqRx = fRx;
-	hotspotFreqTx = fTx;
-	trxSetFrequency(hotspotFreqRx, hotspotFreqTx, DMR_MODE_DMO);// Override the default assumptions about DMR mode based on frequency
+	if (trxCheckFrequencyInAmateurBand(fRx) && trxCheckFrequencyInAmateurBand(fTx))
+	{
+		hotspotFreqRx = fRx;
+		hotspotFreqTx = fTx;
+		trxSetFrequency(hotspotFreqRx, hotspotFreqTx, DMR_MODE_DMO);// Override the default assumptions about DMR mode based on frequency
+	}
+	else
+	{
+		return 4;// invalid frequency
+	}
 
 	hotspotPowerLevel = nonVolatileSettings.txPowerLevel;
 	// If the power level sent by MMDVMHost is 255 it means the user has left the setting at 100% and potentially does not realise that there is even a setting for this
@@ -2803,7 +2810,10 @@ void hotspotInit(void)
 	// Set CC, QRG and power, in case hotspot menu has left then re-enter.
 	trxSetDMRColourCode(colorCode);
 
-	trxSetFrequency(hotspotFreqRx, hotspotFreqTx, DMR_MODE_DMO);
+	if (trxCheckFrequencyInAmateurBand(hotspotFreqRx) && trxCheckFrequencyInAmateurBand(hotspotFreqTx))
+	{
+		trxSetFrequency(hotspotFreqRx, hotspotFreqTx, DMR_MODE_DMO);
+	}
 
 	if (rf_power != 255)
 	{
