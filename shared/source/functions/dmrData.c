@@ -220,40 +220,68 @@ static uint16_t onesComplementSum(uint32_t sum, const uint8_t *data, int length)
 	return sum;
 }
 
-int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
-						const uint8_t *payload, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts)
-{
-	DMR_DATA_BUFFER static uint8_t ip[DMR_DATA_MAX_PACKET];
-	int total = 28 + length;
+DMR_DATA_BUFFER static uint8_t ipPacket[DMR_DATA_MAX_PACKET];
 
-	if (total > (DMR_DATA_MAX_PACKET - 16))
+// The IPv4 header (Motorola CAI addresses) in front of the length bytes of layer 4 already at ipPacket[20]. A UDP
+// checksum covers the addresses, so it is worked out here; ICMP and SCTP checksums don't, they are kept
+static int buildIPPacket(bool group, uint32_t dst, uint32_t src, uint8_t protocol, int length, uint8_t blockType,
+							int preambles, dmrBurst_t *out, int maxBursts)
+{
+	int total = 20 + length;
+
+	memset(ipPacket, 0, 20);
+	ipPacket[0] = 0x45;// IPv4, 20 byte header
+	putU16(&ipPacket[2], total);
+	putU16(&ipPacket[4], ipIdentification++);
+	ipPacket[8] = group ? 1 : 64;// TTL
+	ipPacket[9] = protocol;
+	ipPacket[12] = CAI_NETWORK_INDIVIDUAL;
+	putId(&ipPacket[13], src);
+	ipPacket[16] = group ? CAI_NETWORK_GROUP : CAI_NETWORK_INDIVIDUAL;
+	putId(&ipPacket[17], dst);
+	putU16(&ipPacket[10], ~onesComplementSum(0, ipPacket, 20));
+
+	if (protocol == DMR_IP_PROTO_UDP)
+	{
+		// Over the pseudo header (addresses, protocol, UDP length) and the datagram
+		putU16(&ipPacket[26], 0);
+		uint16_t sum = onesComplementSum(DMR_IP_PROTO_UDP + length, &ipPacket[12], 8);
+		sum = ~onesComplementSum(sum, &ipPacket[20], length);
+		putU16(&ipPacket[26], (sum == 0) ? 0xFFFF : sum);
+	}
+
+	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, group, dst, src, ipPacket, total, blockType, preambles, out, maxBursts);
+}
+
+int dmrDataBuildIP(bool group, uint32_t dst, uint32_t src, uint8_t protocol, const uint8_t *l4, int length,
+					uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts)
+{
+	if ((length < ((protocol == DMR_IP_PROTO_UDP) ? 8 : 1)) || ((20 + length) > (DMR_DATA_MAX_PACKET - 16)))
 	{
 		return 0;
 	}
 
-	memset(ip, 0, 28);
-	ip[0] = 0x45;// IPv4, 20 byte header
-	putU16(&ip[2], total);
-	putU16(&ip[4], ipIdentification++);
-	ip[8] = group ? 1 : 64;// TTL
-	ip[9] = 17;// UDP
-	ip[12] = CAI_NETWORK_INDIVIDUAL;
-	putId(&ip[13], src);
-	ip[16] = group ? CAI_NETWORK_GROUP : CAI_NETWORK_INDIVIDUAL;
-	putId(&ip[17], dst);
-	putU16(&ip[10], ~onesComplementSum(0, ip, 20));
+	memmove(&ipPacket[20], l4, length);
+	if (protocol == DMR_IP_PROTO_UDP)
+	{
+		putU16(&ipPacket[24], length);
+	}
+	return buildIPPacket(group, dst, src, protocol, length, blockType, preambles, out, maxBursts);
+}
 
-	putU16(&ip[20], srcPort);
-	putU16(&ip[22], dstPort);
-	putU16(&ip[24], 8 + length);
-	memcpy(&ip[28], payload, length);
+int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
+						const uint8_t *payload, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts)
+{
+	if ((length < 0) || ((28 + length) > (DMR_DATA_MAX_PACKET - 16)))
+	{
+		return 0;
+	}
 
-	// UDP checksum over the pseudo header (addresses, protocol, UDP length) and the datagram
-	uint16_t sum = onesComplementSum(17 + 8 + length, &ip[12], 8);
-	sum = ~onesComplementSum(sum, &ip[20], 8 + length);
-	putU16(&ip[26], (sum == 0) ? 0xFFFF : sum);
-
-	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, group, dst, src, ip, total, blockType, preambles, out, maxBursts);
+	memmove(&ipPacket[28], payload, length);
+	putU16(&ipPacket[20], srcPort);
+	putU16(&ipPacket[22], dstPort);
+	putU16(&ipPacket[24], 8 + length);
+	return buildIPPacket(group, dst, src, DMR_IP_PROTO_UDP, 8 + length, blockType, preambles, out, maxBursts);
 }
 
 // Motorola TMS simple text message: length, header (0xA0, or 0xE0 to request an ACK), no address,
@@ -475,6 +503,31 @@ static uint16_t compressedPort(uint8_t portId, const uint8_t **ptr)
 static bool isWellKnownPort(uint16_t port)
 {
 	return (port == DMR_UDP_PORT_LRRP) || (port == DMR_UDP_PORT_ARS) || (port == DMR_UDP_PORT_TMS);
+}
+
+// Layer 4 of an IP based (SAP 4) packet, not a fragment
+bool dmrDataGetIP(const dmrDataPacket_t *packet, dmrDataIP_t *ip)
+{
+	const uint8_t *d = packet->data;
+	int len = packet->length;
+
+	if ((packet->sap != DMR_SAP_IP) || (len < 20) || ((d[0] >> 4) != 4))
+	{
+		return false;
+	}
+
+	int ihl = (d[0] & 0x0F) * 4;
+	int total = (d[2] << 8) | d[3];
+
+	if ((ihl < 20) || (total < ihl) || (len < ihl) || ((((d[6] << 8) | d[7]) & 0x3FFF) != 0))
+	{
+		return false;// bad header, or a fragment
+	}
+
+	ip->protocol = d[9];
+	ip->payload = &d[ihl];
+	ip->length = ((total < len) ? total : len) - ihl;// the blocks may be padded
+	return true;
 }
 
 // UDP datagram of an IP based (SAP 4) or compressed UDP/IP (SAP 3) packet

@@ -79,6 +79,11 @@ typedef struct
 
 #define DMR_CSBKO_PREAMBLE			0x3D
 
+// IP protocols
+#define DMR_IP_PROTO_ICMP			1
+#define DMR_IP_PROTO_UDP			17
+#define DMR_IP_PROTO_SCTP			132
+
 #define DMR_UDP_PORT_LRRP			4001
 #define DMR_UDP_PORT_ARS			4005
 #define DMR_UDP_PORT_TMS			4007
@@ -119,6 +124,9 @@ int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint3
 						const uint8_t *data, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
 						const uint8_t *payload, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
+// An IPv4 packet of any protocol from layer 4 on (the header and its checksum included; a UDP checksum is redone)
+int dmrDataBuildIP(bool group, uint32_t dst, uint32_t src, uint8_t protocol, const uint8_t *l4, int length,
+						uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
 						uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildResponseAck(uint8_t sap, uint32_t dst, uint32_t src, uint8_t sendSeq, dmrBurst_t *out);
@@ -137,6 +145,16 @@ typedef struct
 } dmrDataUDP_t;
 
 bool dmrDataGetUDP(const dmrDataPacket_t *packet, dmrDataUDP_t *udp);
+
+// Layer 4 of an IP based packet (SAP 4), whatever its protocol; false for anything else and for fragments
+typedef struct
+{
+	uint8_t protocol;
+	const uint8_t *payload;
+	int length;
+} dmrDataIP_t;
+
+bool dmrDataGetIP(const dmrDataPacket_t *packet, dmrDataIP_t *ip);
 
 // Decoded TMS text message, text is converted from UTF-16LE to Latin-1 ('?' for anything else)
 typedef struct

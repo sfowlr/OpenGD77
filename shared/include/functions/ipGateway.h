@@ -111,6 +111,10 @@ uint32_t ipGatewayRadioIP(void);
 // to the multicast range. False if the USB IN endpoint is busy.
 bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length);
 
+// The same for an IPv4 packet received over the air, from layer 4 on: ICMP, UDP (its checksum is redone for the new
+// addresses) and SCTP; other protocols are dropped (true).
+bool ipGatewayDeliverIP(bool group, uint32_t dst, uint32_t src, uint8_t protocol, const uint8_t *l4, int length);
+
 // A monitor record (see IPGW_MONITOR_PORT) to the host
 bool ipGatewayDeliverMonitor(const uint8_t *record, int length);
 
@@ -122,6 +126,7 @@ bool ipGatewaySerialOut(const uint8_t *data, int length);
 bool ipGatewaySendFrame(const uint8_t *frame, int length);
 uint32_t ipGatewayRadioId(void);
 void ipGatewaySerialIn(const uint8_t *data, int length);
-bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length);
+// ICMP, UDP or SCTP from the host to a radio ID or talkgroup, from layer 4 on (UDP: header and payload, UDP length bytes)
+bool ipGatewayIPToAir(bool group, uint32_t dst, uint8_t protocol, const uint8_t *l4, int length);
 
 #endif

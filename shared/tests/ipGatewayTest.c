@@ -38,9 +38,10 @@ static struct
 	int calls;
 	bool group;
 	uint32_t dst;
+	uint8_t protocol;
 	uint16_t srcPort;
 	uint16_t dstPort;
-	uint8_t payload[600];
+	uint8_t payload[600];// UDP: the datagram's payload; ICMP, SCTP: the whole message
 	int length;
 } air;
 
@@ -60,15 +61,24 @@ bool ipGatewaySendFrame(const uint8_t *frame, int length)
 	return true;
 }
 
-bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+bool ipGatewayIPToAir(bool group, uint32_t dst, uint8_t protocol, const uint8_t *l4, int length)
 {
 	air.calls++;
 	air.group = group;
 	air.dst = dst;
-	air.srcPort = srcPort;
-	air.dstPort = dstPort;
-	memcpy(air.payload, payload, length);
-	air.length = length;
+	air.protocol = protocol;
+	if (protocol == 17)
+	{
+		air.srcPort = (l4[0] << 8) | l4[1];
+		air.dstPort = (l4[2] << 8) | l4[3];
+		memcpy(air.payload, &l4[8], length - 8);
+		air.length = length - 8;
+	}
+	else
+	{
+		memcpy(air.payload, l4, length);
+		air.length = length;
+	}
 	return true;
 }
 
@@ -122,6 +132,34 @@ static int hostUdp(uint8_t *f, const uint8_t *dstMac, uint32_t src, uint32_t dst
 }
 
 static void put32(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
+
+// Builds Ethernet + IPv4 from the host around a layer 4 message of any protocol
+static int hostIp(uint8_t *f, const uint8_t *dstMac, uint32_t src, uint32_t dst, uint8_t protocol, const uint8_t *l4, int n)
+{
+	memcpy(f, dstMac, 6); memcpy(f + 6, HOST_MAC, 6); f[12] = 0x08; f[13] = 0x00;
+	uint8_t *ip = f + 14;
+	memset(ip, 0, 20);
+	ip[0] = 0x45; ip[2] = (20 + n) >> 8; ip[3] = 20 + n; ip[6] = 0x40; ip[8] = 64; ip[9] = protocol;
+	put32(&ip[12], src);
+	put32(&ip[16], dst);
+	uint16_t c = sum16(ip, 20, 0); ip[10] = c >> 8; ip[11] = c;
+	memcpy(ip + 20, l4, n);
+	return 14 + 20 + n;
+}
+
+// CRC-32c (RFC 4960 appendix B), stored low byte first
+static void sctpChecksum(uint8_t *packet, int n)
+{
+	uint32_t crc = 0xFFFFFFFF;
+	memset(&packet[8], 0, 4);
+	for (int i = 0; i < n; i++)
+	{
+		crc ^= packet[i];
+		for (int b = 0; b < 8; b++) crc = (crc & 1) ? ((crc >> 1) ^ 0x82F63B78) : (crc >> 1);
+	}
+	crc = ~crc;
+	packet[8] = crc; packet[9] = crc >> 8; packet[10] = crc >> 16; packet[11] = crc >> 24;
+}
 
 static uint32_t get32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]; }
 
@@ -313,6 +351,56 @@ static void testToAir(void)
 	CHECK(air.calls == 5);
 }
 
+// ICMP and SCTP go over the air and back as they are, other protocols don't
+static void testOtherProtocols(void)
+{
+	uint8_t f[200];
+	uint8_t echo[16] = { 8, 0, 0, 0, 0x12, 0x34, 0, 1, 'o', 'v', 'e', 'r', ' ', 'a', 'i', 'r' };
+	uint16_t c = sum16(echo, sizeof(echo), 0); echo[2] = c >> 8; echo[3] = c;
+	// SCTP: common header, then a HEARTBEAT chunk with its info parameter
+	uint8_t sctp[24] = { 0x0B, 0xB8, 0x0B, 0xB9, 0xDE, 0xAD, 0xBE, 0xEF, 0, 0, 0, 0, 4, 0, 0, 12, 0, 1, 0, 8, 1, 2, 3, 4 };
+	sctpChecksum(sctp, sizeof(sctp));
+	const uint8_t tcp[20] = { 0x13, 0x88, 0x00, 0x50, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0x72, 0x10, 0, 0, 0, 0 };
+
+	air.calls = 0;
+	in(f, hostIp(f, GW_MAC, HOST_IP, IPGW_INDIVIDUAL_NET | 235, 1, echo, sizeof(echo)));// ping radio 235
+	CHECK(air.calls == 1 && !air.group && air.dst == 235 && air.protocol == 1);
+	CHECK(air.length == sizeof(echo) && memcmp(air.payload, echo, sizeof(echo)) == 0);
+
+	in(f, hostIp(f, GW_MAC, HOST_IP, IPGW_MULTICAST_NET | 9, 132, sctp, sizeof(sctp)));// SCTP to talkgroup 9
+	CHECK(air.calls == 2 && air.group && air.dst == 9 && air.protocol == 132);
+	CHECK(air.length == sizeof(sctp) && memcmp(air.payload, sctp, sizeof(sctp)) == 0);
+
+	in(f, hostIp(f, GW_MAC, HOST_IP, IPGW_INDIVIDUAL_NET | 235, 6, tcp, sizeof(tcp)));// TCP: dropped
+	in(f, hostIp(f, BCAST_MAC, HOST_IP, IPGW_BROADCAST_IP, 1, echo, sizeof(echo)));// broadcast ping: dropped
+	in(f, hostIp(f, GW_MAC, HOST_IP, IPGW_ALL_CALL_IP, 132, sctp, sizeof(sctp)));// SCTP to the all call: dropped
+	CHECK(air.calls == 2 && framesSent == 0);
+
+	// Over the air to the host: from 11.0.0.235, the message unchanged
+	echo[0] = 0;// the reply
+	echo[2] = echo[3] = 0; c = sum16(echo, sizeof(echo), 0); echo[2] = c >> 8; echo[3] = c;
+	CHECK(ipGatewayDeliverIP(false, RADIO_ID, 235, 1, echo, sizeof(echo)));
+	CHECK(memcmp(lastFrame, HOST_MAC, 6) == 0 && lastFrame[14 + 9] == 1);
+	CHECK(get32(&lastFrame[26]) == (IPGW_INDIVIDUAL_NET | 235) && get32(&lastFrame[30]) == HOST_IP);
+	CHECK(sum16(&lastFrame[14], 20, 0) == 0 && sum16(&lastFrame[34], sizeof(echo), 0) == 0);
+	CHECK(lastLength == 34 + (int)sizeof(echo) && memcmp(&lastFrame[34], echo, sizeof(echo)) == 0);
+
+	CHECK(ipGatewayDeliverIP(true, 9, 235, 132, sctp, sizeof(sctp)));
+	CHECK(lastFrame[0] == 0x01 && lastFrame[14 + 9] == 132 && get32(&lastFrame[30]) == (IPGW_MULTICAST_NET | 9));
+	CHECK(memcmp(&lastFrame[34], sctp, sizeof(sctp)) == 0);
+
+	framesSent = 0;
+	CHECK(ipGatewayDeliverIP(false, RADIO_ID, 235, 6, tcp, sizeof(tcp)));// TCP: dropped, not busy
+	CHECK(framesSent == 0);
+
+	// UDP through the IP path: the checksum is redone for the host side addresses
+	uint8_t udp[12] = { 0x0F, 0xA1, 0x0F, 0xA1, 0, 0, 0, 0, 'l', 'r', 'r', 'p' };
+	CHECK(ipGatewayDeliverIP(false, RADIO_ID, 235, 17, udp, sizeof(udp)));
+	uint32_t s = IPGW_INDIVIDUAL_NET | 235, d = HOST_IP;
+	uint32_t ps = (s >> 16) + (s & 0xFFFF) + (d >> 16) + (d & 0xFFFF) + 17 + sizeof(udp);
+	CHECK(lastFrame[38] == 0 && lastFrame[39] == sizeof(udp) && sum16(&lastFrame[34], sizeof(udp), ps) == 0);
+}
+
 static void testDeliver(void)
 {
 	const uint8_t report[] = { 0x0D, 0x0A, 0x22, 0x04, 0x00, 0x00, 0x00, 0x01, 0x66, 0x10, 0x23, 0x45 };
@@ -405,6 +493,7 @@ int main(void)
 	testToAir();
 	testDeliver();
 	testSerial();
+	testOtherProtocols();
 	testIdChange();
 
 	fclose(pcap);

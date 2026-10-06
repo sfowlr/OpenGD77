@@ -18,7 +18,7 @@ The code with no hardware dependencies is in `shared/`, built into both trees; t
 | Burst engine: one burst per slot on the current timeslot, DMO or through the repeater wakeup, RX classification of data bursts | each tree's `source/hardware/HR-C6000.c` (`HRC6000DataTxStart`, `DMR_STATE_DATA_TX_*`) |
 | Service: SMS inbox, automatic TMS / confirmed data ACKs, USB `D` commands, delivery to the network adapter | `shared/source/functions/dmrDataService.c` |
 | Hotspot passthrough between MMDVMHost and RF | each tree's `source/functions/hotspot.c`; `shared/source/hotspot/hotspotData.c` (the data lists), `shared/source/hotspot/dmrDataFrame.c` (bursts to and from frames) |
-| Network gateway: Ethernet, ARP, IPv4, ICMP, DHCP, UDP | `shared/source/functions/ipGateway.c` |
+| Network gateway: Ethernet, ARP, IPv4, DHCP, and ICMP, UDP and SCTP between the host and the air | `shared/source/functions/ipGateway.c` |
 | CDC-NCM USB function | each tree's `source/usb/usb_ncm.c` (MK22: KSDK class; STM32: ST USB device class); `shared/include/usb/usb_ncm.h` |
 
 ## Over the air (DMR)
@@ -158,7 +158,8 @@ base and a /8 to /24 prefix; the low bits of an address are the DMR ID):
   is reachable. They all route the same ranges though, so the host sends all its DMR traffic through one of them
   (bind to a radio's interface to choose).
 - The radio's address is also the address of radio ID xor 1. The radio itself only answers ping, DHCP and UDP port
-  3334 there; anything else sent to it goes over the air to radio ID xor 1, and data from that radio arrives from it.
+  3334 there; any other ICMP, UDP or SCTP sent to it goes over the air to radio ID xor 1, and data from that radio
+  arrives from it.
   The radio's address is the DHCP server identifier.
 - `-DIPGW_LINK_PREFIX=31` makes the host and the radio a /31 instead (the radio answers ARP for its own address
   only). macOS treats both ends of a /31 as broadcast addresses and refuses a plain send to the radio (it needs
@@ -174,13 +175,15 @@ base and a /8 to /24 prefix; the low bits of an address are the DMR ID):
 | Ethernet | unicast, broadcast and IPv4 multicast frames up to 600 bytes |
 | ARP | answers for every address but the host's (on a /31 only for the radio's own address) |
 | IPv4 | no fragments (fragments are dropped); datagrams over ~450 bytes can't go over the air |
-| ICMP | echo (ping) of the radio's address |
+| ICMP, to the radio | echo (ping) of the radio's address, answered by the radio itself |
+| ICMP and SCTP, host → air | as UDP below (from the host's own address, to an individual address or a talkgroup), the message unchanged (neither checksum covers the addresses); never to the all call or a broadcast address. So the host can ping another radio's host over the air, and its replies come back the same way |
+| ICMP and SCTP, air → host | every ICMP and SCTP packet received over the air (SAP 4), the message unchanged, addressed as UDP below |
 | DHCP | one lease, the host's address from the radio's DMR ID; options 53, 54, 51 (10 minutes), 1, 121 and 249 (same routes), no default route. A renewal after the radio's DMR ID changed is refused (NAK), so the host gets the new address |
-| UDP, host → air | from the host's own address only (never anything a host forwards). Individual address → private data to that ID; 225.x.y.z (or the group range) → group data to that talkgroup; the all call (the top individual address 11.255.255.255, 255.255.255.255, or the subnet broadcast on a shared link) → group data to 16777215, for UDP ports 4000-4099 only, so the host's own broadcasts (NetBIOS, discovery, LAN sync) never key the radio. Sent as unconfirmed IPv4/UDP (SAP 4) with the CAI addresses |
-| UDP, air → host | every UDP packet received over the air (SAP 4 or compressed SAP 3), from the source's individual address: to the host's address, to 225.x.y.z (multicast MAC) for talkgroups, to 255.255.255.255 (subnet broadcast on a shared link) for the all call. Data between two other radios goes to a MAC address the host doesn't have, so the host ignores it but Wireshark (promiscuous) shows it |
+| UDP, host → air | from the host's own address only (never anything a host forwards). Individual address → private data to that ID; 225.x.y.z (or the group range) → group data to that talkgroup; the all call (the top individual address 11.255.255.255, 255.255.255.255, or the subnet broadcast on a shared link) → group data to 16777215, for UDP ports 4000-4099 only, so the host's own broadcasts (NetBIOS, discovery, LAN sync) never key the radio. Sent as unconfirmed IPv4 (SAP 4) with the CAI addresses; the UDP checksum is redone for them |
+| UDP, air → host | every UDP packet received over the air (SAP 4 or compressed SAP 3), from the source's individual address (the UDP checksum redone): to the host's address, to 225.x.y.z (multicast MAC) for talkgroups, to 255.255.255.255 (subnet broadcast on a shared link) for the all call. Data between two other radios goes to a MAC address the host doesn't have, so the host ignores it but Wireshark (promiscuous) shows it |
 | UDP 40077, monitor | every data burst received (CSBKs, MBC and headers with a good CRC, blocks also with a CRC error) as a UDP broadcast from the radio: version (1), timeslot (1-2), colour code, DT, flags, length, payload |
 | UDP 3334, serial protocol (STM32) | datagrams to the radio's address are handled exactly like bytes on the serial port, replies go back to the address and port that last sent: MMDVM (hotspot mode) and the `D` commands. One client at a time |
-| TCP, IPv6 | no |
+| TCP, other IP protocols, IPv6 | no (dropped both ways) |
 
 MMDVMHost over the network adapter (STM32 radios), for a radio whose host got 11.0.39.21:
 

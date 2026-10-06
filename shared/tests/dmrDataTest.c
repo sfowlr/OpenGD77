@@ -177,6 +177,52 @@ static void testTMSRates(void)
 	}
 }
 
+// Any IP protocol: built from layer 4, received back unchanged; a UDP checksum is right for the CAI addresses
+static void testIPPackets(void)
+{
+	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
+	uint8_t echo[24] = { 8, 0, 0x5A, 0x5A, 0x12, 0x34, 0, 7 };
+	uint8_t sctp[28] = { 0x0B, 0xB8, 0x0B, 0xB9, 0xDE, 0xAD, 0xBE, 0xEF, 0x11, 0x22, 0x33, 0x44, 4, 0, 0, 16 };
+	const uint8_t protocols[2] = { DMR_IP_PROTO_ICMP, DMR_IP_PROTO_SCTP };
+	const uint8_t *messages[2] = { echo, sctp };
+	const int lengths[2] = { sizeof(echo), sizeof(sctp) };
+	dmrDataIP_t ip;
+	dmrDataUDP_t udp;
+
+	for (int i = 8; i < (int)sizeof(echo); i++) echo[i] = i;
+	for (int i = 16; i < (int)sizeof(sctp); i++) sctp[i] = 0xA0 + i;
+
+	for (int m = 0; m < 2; m++)
+	{
+		int n = dmrDataBuildIP(m == 1, 235, 3141592, protocols[m], messages[m], lengths[m], DT_RATE_12_DATA, 1, bursts, DMR_DATA_MAX_BURSTS);
+
+		CHECK(n > 2);
+		CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
+		CHECK(dmrDataRxPacket.sap == DMR_SAP_IP && dmrDataRxPacket.group == (m == 1));
+		CHECK(dmrDataGetIP(&dmrDataRxPacket, &ip) && ip.protocol == protocols[m]);
+		CHECK(ip.length == lengths[m] && memcmp(ip.payload, messages[m], lengths[m]) == 0);
+		CHECK(!dmrDataGetUDP(&dmrDataRxPacket, &udp));
+		dumpBursts(m ? "ip-sctp" : "ip-icmp", bursts, n);
+	}
+
+	// UDP from layer 4: the length and checksum are redone
+	uint8_t datagram[14] = { 0x0F, 0xA1, 0x0F, 0xA7, 0xFF, 0xFF, 0x12, 0x34, 'h', 'e', 'l', 'l', 'o', '!' };
+	int n = dmrDataBuildIP(false, 235, 3141592, DMR_IP_PROTO_UDP, datagram, sizeof(datagram), DT_RATE_34_DATA, 0, bursts, DMR_DATA_MAX_BURSTS);
+	CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
+	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp) && udp.srcPort == 4001 && udp.dstPort == 4007 && udp.length == 6);
+	const uint8_t *d = dmrDataRxPacket.data;
+	uint32_t sum = 17 + sizeof(datagram);
+	for (int i = 12; i < 20; i += 2) sum += (d[i] << 8) | d[i + 1];
+	for (int i = 20; i < 20 + (int)sizeof(datagram); i += 2) sum += (d[i] << 8) | d[i + 1];
+	while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+	CHECK(sum == 0xFFFF && d[24] == 0 && d[25] == sizeof(datagram));
+
+	// A fragment isn't taken
+	dmrDataRxPacket.data[6] |= 0x20;// more fragments
+	CHECK(!dmrDataGetIP(&dmrDataRxPacket, &ip));
+	CHECK(dmrDataBuildIP(false, 235, 1, DMR_IP_PROTO_UDP, datagram, 4, DT_RATE_12_DATA, 0, bursts, DMR_DATA_MAX_BURSTS) == 0);// too short
+}
+
 static void testTMSAck(void)
 {
 	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
@@ -378,6 +424,7 @@ int main(void)
 	testPadding(DT_RATE_34_DATA);
 	testPadding(DT_RATE_1_DATA);
 	testTMSRates();
+	testIPPackets();
 	testTMSAck();
 	testRadioDeskVectors();
 	testCSBK();

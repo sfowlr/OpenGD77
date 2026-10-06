@@ -80,17 +80,17 @@ static dmrBurst_t rxBursts[RX_BURST_QUEUE_SIZE];
 static volatile uint8_t rxBurstWriteIdx = 0;
 static volatile uint8_t rxBurstReadIdx = 0;
 
-// A UDP datagram received over the air, waiting for the main task to give it to the USB network gateway
+// An IP packet received over the air (ICMP, UDP or SCTP, from layer 4 on), waiting for the main task to give it to the
+// USB network gateway
 static volatile bool airToHostPending = false;
 DMR_DATA_BUFFER static struct
 {
 	bool group;
 	uint32_t dst;
 	uint32_t src;
-	uint16_t srcPort;
-	uint16_t dstPort;
+	uint8_t protocol;
 	int length;
-	uint8_t payload[DMR_DATA_MAX_PACKET];
+	uint8_t l4[DMR_DATA_MAX_PACKET];
 } airToHost;
 
 // Every data burst received, for the USB network host (see IPGW_MONITOR_PORT)
@@ -221,8 +221,8 @@ void dmrDataServiceTick(void)
 	if (airToHostPending)
 	{
 		// Retried on the next tick if the USB IN endpoint is still busy, dropped if the link went down
-		if (!usbNcmIsUp() || ipGatewayDeliverUDP(airToHost.group, airToHost.dst, airToHost.src, airToHost.srcPort,
-													airToHost.dstPort, airToHost.payload, airToHost.length))
+		if (!usbNcmIsUp() || ipGatewayDeliverIP(airToHost.group, airToHost.dst, airToHost.src, airToHost.protocol,
+													airToHost.l4, airToHost.length))
 		{
 			airToHostPending = false;
 		}
@@ -236,10 +236,16 @@ uint32_t ipGatewayRadioId(void)
 	return (uiDataGlobal.userDMRId != 0) ? uiDataGlobal.userDMRId : trxDMRID;
 }
 
-// USB network gateway: a datagram from the host to a radio ID or talkgroup
-bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+// USB network gateway: ICMP, UDP or SCTP from the host to a radio ID or talkgroup
+bool ipGatewayIPToAir(bool group, uint32_t dst, uint8_t protocol, const uint8_t *l4, int length)
 {
-	return dmrDataServiceSendUDP(group, dst, srcPort, dstPort, payload, length);
+	if (dmrDataServiceIsBusy() || !canTransmit())
+	{
+		return false;
+	}
+
+	return queueTx(dmrDataBuildIP(group, dst, trxDMRID, protocol, l4, length, DT_RATE_12_DATA, DMR_DATA_SMS_PREAMBLES,
+									txBursts, DMR_DATA_MAX_BURSTS));
 }
 
 static bool isForUs(const dmrDataPacket_t *packet)
@@ -276,17 +282,39 @@ static void handlePacket(const dmrDataPacket_t *packet)
 	dmrDataTMS_t tms;
 	bool isUDP = dmrDataGetUDP(packet, &udp);
 
-	// Everything IP based goes to the USB network host, also between other radios so that a capture shows it
-	if (isUDP && (packet->src != trxDMRID) && usbNcmIsUp() && !airToHostPending && (udp.length <= (int)sizeof(airToHost.payload)))
+	// ICMP, UDP and SCTP go to the USB network host, also between other radios so that a capture shows them. UDP is
+	// rebuilt from its ports and payload (it may have come with a compressed header, SAP 3)
+	if ((packet->src != trxDMRID) && usbNcmIsUp() && !airToHostPending)
 	{
-		airToHost.group = packet->group;
-		airToHost.dst = packet->dst;
-		airToHost.src = packet->src;
-		airToHost.srcPort = udp.srcPort;
-		airToHost.dstPort = udp.dstPort;
-		airToHost.length = udp.length;
-		memcpy(airToHost.payload, udp.payload, udp.length);
-		airToHostPending = true;
+		dmrDataIP_t ip;
+
+		if (isUDP && ((8 + udp.length) <= (int)sizeof(airToHost.l4)))
+		{
+			airToHost.protocol = DMR_IP_PROTO_UDP;
+			airToHost.l4[0] = udp.srcPort >> 8;
+			airToHost.l4[1] = udp.srcPort & 0xFF;
+			airToHost.l4[2] = udp.dstPort >> 8;
+			airToHost.l4[3] = udp.dstPort & 0xFF;
+			memset(&airToHost.l4[4], 0, 4);// length and checksum, worked out by the gateway
+			memcpy(&airToHost.l4[8], udp.payload, udp.length);
+			airToHost.length = 8 + udp.length;
+			airToHostPending = true;
+		}
+		else if (!isUDP && dmrDataGetIP(packet, &ip) && ((ip.protocol == DMR_IP_PROTO_ICMP) || (ip.protocol == DMR_IP_PROTO_SCTP)) &&
+					(ip.length > 0) && (ip.length <= (int)sizeof(airToHost.l4)))
+		{
+			airToHost.protocol = ip.protocol;
+			memcpy(airToHost.l4, ip.payload, ip.length);
+			airToHost.length = ip.length;
+			airToHostPending = true;
+		}
+
+		if (airToHostPending)
+		{
+			airToHost.group = packet->group;
+			airToHost.dst = packet->dst;
+			airToHost.src = packet->src;
+		}
 	}
 
 	if (!isForUs(packet))

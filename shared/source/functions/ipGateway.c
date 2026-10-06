@@ -3,8 +3,8 @@
  *
  * Ethernet, ARP (on a /31 for the radio's address, on a shared link for every address but the host's), ICMP echo to the
  * radio's address,
- * a DHCP server with a single lease, and UDP between the host and DMR IDs / talkgroups (addressing in ipGateway.h).
- * No TCP, no fragments.
+ * a DHCP server with a single lease, and ICMP, UDP and SCTP between the host and DMR IDs / talkgroups (addressing in
+ * ipGateway.h). No TCP or other protocols, no fragments.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@
 #define ETHERTYPE_ARP		0x0806
 #define IP_PROTO_ICMP		1
 #define IP_PROTO_UDP		17
+#define IP_PROTO_SCTP		132
 #define DHCP_SERVER_PORT	67
 #define DHCP_CLIENT_PORT	68
 #define DHCP_MIN_LENGTH		300				// BOOTP minimum, some clients drop shorter replies
@@ -393,30 +394,38 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 	const uint8_t *l4 = &ip[ihl];
 	int l4Length = total - ihl;
 
-	if (ip[9] == IP_PROTO_ICMP)
+	if ((ip[9] == IP_PROTO_ICMP) && (dst == ipGatewayRadioIP()) && (dst != 0))
 	{
-		if ((dst == ipGatewayRadioIP()) && (dst != 0))
+		handleICMP(frame, ip, l4, l4Length);
+		return;
+	}
+
+	uint16_t dstPort = 0;
+
+	if (ip[9] == IP_PROTO_UDP)
+	{
+		if (l4Length < 8)
 		{
-			handleICMP(frame, ip, l4, l4Length);
+			return;
 		}
-		return;
-	}
 
-	if ((ip[9] != IP_PROTO_UDP) || (l4Length < 8))
-	{
-		return;
-	}
+		int udpLength = get16(&l4[4]);
+		if ((udpLength < 8) || (udpLength > l4Length))
+		{
+			return;
+		}
+		l4Length = udpLength;
 
-	int udpLength = get16(&l4[4]);
-	if ((udpLength < 8) || (udpLength > l4Length))
-	{
-		return;
+		if (get16(&l4[2]) == DHCP_SERVER_PORT)
+		{
+			handleDHCP(&l4[8], udpLength - 8);
+			return;
+		}
+		dstPort = get16(&l4[2]);
 	}
-
-	if (get16(&l4[2]) == DHCP_SERVER_PORT)
+	else if ((ip[9] != IP_PROTO_ICMP) && (ip[9] != IP_PROTO_SCTP))
 	{
-		handleDHCP(&l4[8], udpLength - 8);
-		return;
+		return;// ICMP, UDP and SCTP only
 	}
 
 	// Only what the host itself sends, never anything a host that forwards packets sends back
@@ -425,20 +434,19 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 		return;
 	}
 
-	uint16_t dstPort = get16(&l4[2]);
-	bool group = true;
-
-	if ((dst == ipGatewayRadioIP()) && (dstPort == IPGW_SERIAL_PORT))
+	if ((ip[9] == IP_PROTO_UDP) && (dst == ipGatewayRadioIP()) && (dstPort == IPGW_SERIAL_PORT))
 	{
 		serialPeerPort = get16(&l4[0]);
-		ipGatewaySerialIn(&l4[8], udpLength - 8);
+		ipGatewaySerialIn(&l4[8], l4Length - 8);
 		return;
 	}
+
+	bool group = true;
 	uint32_t id;
 
 	if ((dst == IPGW_ALL_CALL_IP) || (dst == IPGW_BROADCAST_IP) || (dst == 0xFFFFFFFF))
 	{
-		if ((dstPort < DMR_APP_PORT_FIRST) || (dstPort > DMR_APP_PORT_LAST))
+		if ((ip[9] != IP_PROTO_UDP) || (dstPort < DMR_APP_PORT_FIRST) || (dstPort > DMR_APP_PORT_LAST))
 		{
 			return;
 		}
@@ -464,7 +472,7 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 		return;
 	}
 
-	ipGatewayToAir(group, id, get16(&l4[0]), dstPort, &l4[8], udpLength - 8);
+	ipGatewayIPToAir(group, id, ip[9], l4, l4Length);
 }
 
 static bool sendUDP(const uint8_t *dstMac, uint32_t srcIp, uint32_t dstIp, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
@@ -487,7 +495,8 @@ static bool sendUDP(const uint8_t *dstMac, uint32_t srcIp, uint32_t dstIp, uint1
 	return sendIPv4(dstMac, IP_PROTO_UDP, srcIp, dstIp, 8 + length);
 }
 
-bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+// Layer 4 (length bytes) is already in tx after the IPv4 header. A UDP checksum covers the addresses, so it is redone
+static bool deliver(bool group, uint32_t dst, uint32_t src, uint8_t protocol, int length)
 {
 	uint32_t srcIp = ADDRESS(INDIVIDUAL, src);
 	uint32_t dstIp;
@@ -526,7 +535,48 @@ bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPor
 		dstMac = (dstIp == ipGatewayHostIP()) ? hostMac : monitorMac;
 	}
 
-	return sendUDP(dstMac, srcIp, dstIp, srcPort, dstPort, payload, length);
+	if (protocol == IP_PROTO_UDP)
+	{
+		uint8_t *udp = &tx[ETH_HEADER + 20];
+
+		put16(&udp[4], length);
+		put16(&udp[6], 0);
+		uint16_t sum = checksum(udp, length, pseudoHeaderSum(srcIp, dstIp, length));
+		put16(&udp[6], (sum == 0) ? 0xFFFF : sum);
+	}
+
+	return sendIPv4(dstMac, protocol, srcIp, dstIp, length);
+}
+
+bool ipGatewayDeliverIP(bool group, uint32_t dst, uint32_t src, uint8_t protocol, const uint8_t *l4, int length)
+{
+	if ((protocol != IP_PROTO_ICMP) && (protocol != IP_PROTO_UDP) && (protocol != IP_PROTO_SCTP))
+	{
+		return true;// not forwarded
+	}
+
+	if ((length < ((protocol == IP_PROTO_UDP) ? 8 : 1)) || ((ETH_HEADER + 20 + length) > IPGW_MAX_FRAME))
+	{
+		return true;
+	}
+
+	memmove(&tx[ETH_HEADER + 20], l4, length);
+	return deliver(group, dst, src, protocol, length);
+}
+
+bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+{
+	uint8_t *udp = &tx[ETH_HEADER + 20];
+
+	if ((length < 0) || ((ETH_HEADER + 20 + 8 + length) > IPGW_MAX_FRAME))
+	{
+		return true;
+	}
+
+	memmove(&udp[8], payload, length);
+	put16(&udp[0], srcPort);
+	put16(&udp[2], dstPort);
+	return deliver(group, dst, src, IP_PROTO_UDP, 8 + length);
 }
 
 bool ipGatewaySerialOut(const uint8_t *data, int length)
