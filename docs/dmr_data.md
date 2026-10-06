@@ -34,9 +34,9 @@ this way, not only the ones the firmware builds itself, and bad CRCs go out as g
 | MBC header, continuation (4, 5) | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | Data header (6), any DPF | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | Rate 1/2 block (7) | yes | yes, also with a CRC error | yes | yes, also with a CRC error |
-| Rate 3/4 block (8), 18 bytes | raw `D` bursts only, untested | yes, also with a CRC error (the HR-C6000 decodes the Trellis code) | yes (Trellis decoded, single and double bit errors corrected; DM-1701 on air) | yes (Trellis coded), also with a CRC error |
+| Rate 3/4 block (8), 18 bytes | yes (`D` send kinds 1-3 with rate flag 1, raw bursts) | yes, also with a CRC error (the HR-C6000 decodes the Trellis code) | yes (Trellis decoded, single and double bit errors corrected; DM-1701 on air) | yes (Trellis coded), also with a CRC error |
 | Idle (9) | - | - | refused (NAK 4) | - |
-| Rate 1 block (10), 24 bytes | raw `D` bursts only, untested | yes, also with a CRC error | yes (DM-1701 on air) | yes, also with a CRC error |
+| Rate 1 block (10), 24 bytes | yes (`D` send kinds 1-3 with rate flag 2, raw bursts) | yes, also with a CRC error | yes (DM-1701 on air) | yes, also with a CRC error |
 | USBD (11) | - | - | refused (NAK 4) | - |
 
 - A transmission is at most 40 bursts (`DMR_DATA_MAX_BURSTS`), one per slot on the channel's timeslot. It waits for a
@@ -47,7 +47,7 @@ this way, not only the ones the firmware builds itself, and bad CRCs go out as g
 
 | DPF | TX | RX |
 | --- | --- | --- |
-| Unconfirmed (2) | built by the radio (`D` send kinds 1-3, network adapter) | reassembled, CRC-32 checked |
+| Unconfirmed (2) | built by the radio (`D` send kinds 1-3 at any of the three rates, network adapter at Rate 1/2) | reassembled, CRC-32 checked |
 | Confirmed (3) | raw bursts only (no retries or selective ACKs yet) | reassembled; to this radio, acknowledged with an ETSI response (ACK) |
 | Response (1) | sent as the ACK of confirmed data | passed on as bursts |
 | UDT (0), defined short (13), raw short (14), proprietary (15) | raw bursts | passed on as bursts (hotspot: the burst count is taken from the header) |
@@ -91,7 +91,8 @@ result byte (1 = OK, 0 = failed / busy / nothing available).
 
 Send kinds: 0 the appended bursts as they are, 1 TMS text from the appended bytes, 2 UDP datagram from the appended
 bytes to the port, 3 unconfirmed packet from the appended bytes with DPF and SAP in the two port bytes. Send flags:
-1 = group destination, 2 = request a TMS ACK.
+1 = group destination, 2 = request a TMS ACK, bits 2-3 the block rate of kinds 1-3 (0 Rate 1/2, 1 Rate 3/4,
+2 Rate 1; 3 is refused). Kind 0 sends the appended bursts as they are, at whatever rate they were built.
 
 The RX burst queue holds the last 8 data bursts received (oldest dropped). Sub command 8 saves with the other
 settings (e.g. the CPS save and reboot command `C 6 0`) and takes effect at the next boot; the STM32 radios also
@@ -201,7 +202,9 @@ The CPS needs the serial port (on the STM32 radios, serial mode).
 | DM-1701: TMS sent from the host over the network adapter | on air, received and decoded by an SDR |
 | DM-1701: data frames from MMDVM over UDP | on air bit for bit, received by an SDR |
 | DM-1701: Rate 3/4 and Rate 1 packets from MMDVM over UDP (built by RadioDesk's encoder, all at once and paced, Rate 3/4 also with 1-2 bit errors per block) | on air bit for bit (errors corrected), CRC-32 good in RadioDesk's decoder |
-| Data RX on the radio (normal mode and hotspot), confirmed data, the network adapter on Windows and Linux, the MK22 network adapter | not yet on hardware |
+| DM-1701: packets built by the radio at Rate 3/4 and Rate 1 (`D` send kinds 1-3) | on air, received by an MMDVM_HS: Rate 3/4 TMS 3 of 3 and UDP, Rate 1 raw packet, CRC-32 good; Rate 1 TMS 1 of 3 (single RF bit errors, Rate 1 has no FEC); rate 3 refused |
+| DM-1701: data RX in normal mode, TMS from an MMDVM_HS (467.375 MHz) | Rate 1/2, Rate 3/4 and Rate 1 to its own ID, into the inbox; group TMS to the selected talkgroup taken, to another talkgroup ignored. Rate 1 needs a clean channel (one bit error loses the packet) |
+| Data RX in hotspot mode, confirmed data, the network adapter on Windows and Linux, the MK22 network adapter | not yet on hardware |
 
 ## Host tests
 
@@ -214,7 +217,7 @@ to pcaps that are checked with tshark (when Wireshark is installed).
 
 ## Not done yet
 
-- Rate 3/4 and Rate 1 built by the radio itself (`D` send kinds 1-3 and the network adapter use Rate 1/2).
+- Rate 3/4 or Rate 1 from the network adapter (it sends Rate 1/2).
 - Confirmed data on TX (retries and selective ACKs). Confirmed data on RX is acknowledged.
 - SMS compose / inbox screens, storing messages in flash.
 - ETSI defined short data and Hytera text formats.
