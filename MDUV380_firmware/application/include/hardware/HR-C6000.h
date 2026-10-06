@@ -149,6 +149,8 @@ void HRC6000SetMic(bool isOn);
 bool HRC6000DataTxStart(const dmrBurst_t *bursts, int count);
 dmrDataTxStatus_t HRC6000DataTxGetStatus(void);
 void HRC6000DataTxClearStatus(void);
+bool HRC6000IsTransmitting(void);
+bool HRC6000HotspotTxFramePending(void);
 // Implemented by the data service, called from the HR-C6000 task for every packet data burst received
 void dmrDataServiceRxBurst(const dmrBurst_t *burst);
 

@@ -1083,7 +1083,7 @@ static void getStatus(void)
 	buf[4]  = hotspotModemState;
 	// Transmitting until the radio's last burst (the terminator) is on air, and while packet data is queued or sent
 	bool transmitting = (hotspotState == HOTSPOT_STATE_TX_START_BUFFERING) || (hotspotState == HOTSPOT_STATE_TRANSMITTING) ||
-			(hotspotState == HOTSPOT_STATE_TX_SHUTDOWN) || hotspotCwKeying || trxTransmissionEnabled || trxIsTransmitting ||
+			(hotspotState == HOTSPOT_STATE_TX_SHUTDOWN) || hotspotCwKeying || trxTransmissionEnabled || HRC6000IsTransmitting() ||
 			hotspotDataIsBusy();
 
 	buf[5]  = transmitting ? 0x01 : 0x00;
@@ -2612,7 +2612,9 @@ void hotspotStateMachine(void)
 		case HOTSPOT_STATE_TRANSMITTING:
 			// Stop transmitting when there is no data in the buffer or if MMDVMHost sends the idle command. After the
 			// host's terminator straight away, else after the network timeout and a wait for more of the call
-			if (((wavbuffer_count == 0) && (netTerminatorReceived || (--netRXDataTimer <= 0))) || (hotspotModemState == STATE_IDLE))
+			// (and once the HR-C6000 has taken the last frame, else it would send silence in its place)
+			if (((wavbuffer_count == 0) && !HRC6000HotspotTxFramePending() && (netTerminatorReceived || (--netRXDataTimer <= 0))) ||
+					(hotspotModemState == STATE_IDLE))
 			{
 				hotspotState = HOTSPOT_STATE_TX_SHUTDOWN;
 				txStopDelay = (netTerminatorReceived ? 0 : ((hotspotModemState == STATE_IDLE) ? TX_BUFFERING_TIMEOUT : (TX_BUFFERING_TIMEOUT * 2)));
@@ -2637,10 +2639,13 @@ void hotspotStateMachine(void)
 			else
 			{
 				txStopDelay = 0; // ensure its value is 0;
-				if (trxIsTransmitting ||
-						((hotspotModemState == STATE_IDLE) && trxTransmissionEnabled)) // MMDVMHost asked to go back to IDLE (mostly on shutdown)
+
+				// As at the end of a PTT press, only the transmission is stopped: the HR-C6000 finishes the superframe,
+				// sends the terminator and goes back to receive itself. Switching the RF to receive here, between our
+				// bursts, cut the end of the call off and made GET_STATUS report idle too early (KNOWN_BUGS 3)
+				trxTransmissionEnabled = false;
+				if (!HRC6000IsTransmitting())
 				{
-					trxTransmissionEnabled = false;
 					trxDisableTransmission();
 					hotspotState = HOTSPOT_STATE_RX_START;
 					uiHotspotUpdateScreen(HOTSPOT_RX_IDLE);
