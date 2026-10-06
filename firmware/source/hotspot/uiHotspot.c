@@ -1750,7 +1750,9 @@ static void hotspotStateMachine(void)
 		case HOTSPOT_STATE_TRANSMITTING:
 			// Stop transmitting when the buffer is empty after the host's terminator, or for NET_VOICE_TIMEOUT_MS without
 			// one (so that network jitter doesn't cut the call), or if MMDVMHost sends the idle command
-			if (((wavbuffer_count == 0) && (netTerminatorReceived || ((fw_millis() - netVoiceLastMs) > NET_VOICE_TIMEOUT_MS))) ||
+			// (and once the HR-C6000 has taken the last frame, else it would send silence in its place)
+			if (((wavbuffer_count == 0) && !HRC6000HotspotTxFramePending() &&
+					(netTerminatorReceived || ((fw_millis() - netVoiceLastMs) > NET_VOICE_TIMEOUT_MS))) ||
 					(modemState == STATE_IDLE))
 			{
 				hotspotState = HOTSPOT_STATE_TX_SHUTDOWN;
@@ -1774,10 +1776,12 @@ static void hotspotStateMachine(void)
 			}
 			else
 			{
-				if ((trxIsTransmitting) ||
-						((modemState == STATE_IDLE) && trxTransmissionEnabled)) // MMDVMHost asked to go back to IDLE (mostly on shutdown)
+				// As at the end of a PTT press, only the transmission is stopped: the HR-C6000 finishes the superframe,
+				// sends the terminator and goes back to receive itself. Switching the RF to receive here cut the end of
+				// the call off (KNOWN_BUGS 3)
+				trxTransmissionEnabled = false;
+				if (!HRC6000IsTransmitting())
 				{
-					trxTransmissionEnabled = false;
 					trxDisableTransmission();
 					hotspotState = HOTSPOT_STATE_RX_START;
 					updateScreen(HOTSPOT_RX_IDLE);
@@ -1888,7 +1892,7 @@ static void getStatus(void)
 	buf[4U]  = modemState;
 	// Transmitting until the radio's last burst (the terminator) is on air, and while packet data is queued or sent
 	bool transmitting = (hotspotState == HOTSPOT_STATE_TX_START_BUFFERING) || (hotspotState == HOTSPOT_STATE_TRANSMITTING) ||
-			(hotspotState == HOTSPOT_STATE_TX_SHUTDOWN) || cwKeying || trxTransmissionEnabled || trxIsTransmitting ||
+			(hotspotState == HOTSPOT_STATE_TX_SHUTDOWN) || cwKeying || trxTransmissionEnabled || HRC6000IsTransmitting() ||
 			hotspotDataIsBusy();
 
 	buf[5U]  = transmitting ? 0x01U : 0x00U;

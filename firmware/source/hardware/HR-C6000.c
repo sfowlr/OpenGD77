@@ -1526,6 +1526,21 @@ bool callAcceptFilter(void)
 
 
 
+// The HR-C6000 is sending a call or data, from the first LC header to the terminator. On the STM32 radios the PA is
+// switched burst by burst, so the flags that follow it can't tell this
+bool HRC6000IsTransmitting(void)
+{
+	int s = slot_state;
+
+	return ((s >= DMR_STATE_TX_START_1) && (s <= DMR_STATE_TX_END_3_DMO)) || (s == DMR_STATE_DATA_TX_1) || (s == DMR_STATE_DATA_TX_2);
+}
+
+// Hotspot: the HR-C6000 has a voice frame from the buffer that it hasn't sent yet
+bool HRC6000HotspotTxFramePending(void)
+{
+	return !hotspotDMRTxFrameBufferEmpty;
+}
+
 bool HRC6000DataTxStart(const dmrBurst_t *bursts, int count)
 {
 	if ((count <= 0) || (dataTxStatus == DMR_DATA_TX_RUNNING) || trxTransmissionEnabled || trxIsTransmitting ||
