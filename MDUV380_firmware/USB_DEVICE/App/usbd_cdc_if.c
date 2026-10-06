@@ -108,6 +108,7 @@ uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 /* USER CODE BEGIN PRIVATE_VARIABLES */
 volatile static uint32_t s_receivingBufferOffset = 0;
 volatile static int32_t s_recvCount = 0;
+volatile static uint32_t s_mmdvmFramesDropped = 0;// MMDVMHost frames that didn't fit in com_requestbuffer
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -290,7 +291,15 @@ static void comReceive(uint8_t* Buf, int32_t recvSize)
 		{
 			if (Buf[0] == MMDVM_FRAME_START)
 			{
-				if (recvSize >= 3) // The shortest MMDVMHost frame length is 3U
+				// Free space in the circular buffer, one byte kept so that a full buffer isn't taken as empty. The
+				// reader only ever frees space, so a stale read index just underestimates it.
+				int freeSpace = (comRecvMMDVMIndexOut - comRecvMMDVMIndexIn - 1 + COM_REQUESTBUFFER_SIZE) % COM_REQUESTBUFFER_SIZE;
+
+				if ((recvSize + 1) > freeSpace)
+				{
+					s_mmdvmFramesDropped++;// it would overwrite frames that haven't been read yet
+				}
+				else if (recvSize >= 3) // The shortest MMDVMHost frame length is 3U
 				{
 					uint8_t frameLength = (uint8_t)recvSize;
 

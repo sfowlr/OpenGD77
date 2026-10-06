@@ -134,14 +134,19 @@ typedef struct
 
 #define NOTIFY_REPEAT_MS	1000	// until the host selects the data alternate setting
 
-// The host configured the device but never selected the data interface. Seen with macOS after a power on, where the
-// announcement doesn't get through even when it is repeated; re-enumerating (what switching the USB mode to serial
-// and back does) fixes it. Linux and Windows select it straight away.
-#define REENUMERATE_AFTER_MS	5000
-#define REENUMERATE_GAP_MS		200		// disconnected long enough for the host to see it
-#define REENUMERATE_MAX			2
-static volatile uint32_t configuredMs;
+// No link: the host configured the device but never selected the data interface, or never configured it at all. Seen
+// with macOS after a power on, where the announcement doesn't get through even when it is repeated, and sometimes the
+// device isn't configured either; re-enumerating (what switching the USB mode to serial and back does) fixes it.
+// Linux and Windows select the data interface straight away. The retries are given back when the link comes up, and
+// when the host configures the device long after the last one (plugged in again).
+#define REENUMERATE_AFTER_MS		3000	// without a link, since the start, our last retry or the configuration
+#define REENUMERATE_GAP_MS			200		// disconnected long enough for the host to see it
+#define REENUMERATE_MAX				6
+#define REENUMERATE_NEW_SESSION_MS	30000
+static volatile uint32_t waitingSinceMs;
+static bool wasNetworkMode = false;
 static uint8_t reenumerations = 0;
+static uint32_t lastReenumerationMs = 0;
 static uint32_t restartAtMs = 0;		// 0: no restart pending
 
 static usbNcm_t ncm;
@@ -229,6 +234,7 @@ static void setDataAlternate(uint8_t alternate)
 
 	if (alternate == 1)
 	{
+		reenumerations = 0;// the link is up
 		USBD_LL_OpenEP(ncmDevice, NCM_IN_EP, USBD_EP_TYPE_BULK, NCM_BULK_PACKET_SIZE);
 		USBD_LL_OpenEP(ncmDevice, NCM_OUT_EP, USBD_EP_TYPE_BULK, NCM_BULK_PACKET_SIZE);
 		ncmDevice->ep_in[NCM_IN_EP & 0x0F].is_used = 1;
@@ -249,7 +255,11 @@ static uint8_t ncmInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
 	pdev->ep_in[NCM_NOTIFY_EP & 0x0F].is_used = 1;
 	pdev->ep_in[NCM_NOTIFY_EP & 0x0F].bInterval = NCM_NOTIFY_INTERVAL;
 	ncm.configured = true;
-	configuredMs = ticksGetMillis();
+	waitingSinceMs = ticksGetMillis();
+	if ((reenumerations >= REENUMERATE_MAX) && ((waitingSinceMs - lastReenumerationMs) > REENUMERATE_NEW_SESSION_MS))
+	{
+		reenumerations = 0;
+	}
 
 	// macOS only selects the data alternate setting once the link is reported up, Linux and Windows select it first.
 	// So the speed and the connection are announced now, and again when alternate 1 is selected.
@@ -570,20 +580,34 @@ static void reenumerateIfStuck(void)
 {
 	uint32_t now = ticksGetMillis();
 
+	if (!usbNetworkMode)
+	{
+		wasNetworkMode = false;
+		return;
+	}
+
+	if (!wasNetworkMode)
+	{
+		wasNetworkMode = true;// at the start, or switched on from the menu
+		waitingSinceMs = now;
+	}
+
 	if (restartAtMs != 0)
 	{
 		if ((int32_t)(now - restartAtMs) >= 0)
 		{
 			restartAtMs = 0;
+			waitingSinceMs = now;
 			MX_USB_DEVICE_Init();
 		}
 		return;
 	}
 
-	if (ncm.configured && (ncm.dataAlternate == 0) && (reenumerations < REENUMERATE_MAX) &&
-			((now - configuredMs) > REENUMERATE_AFTER_MS))
+	if (!(ncm.configured && (ncm.dataAlternate == 1)) && (reenumerations < REENUMERATE_MAX) &&
+			((now - waitingSinceMs) > REENUMERATE_AFTER_MS))
 	{
 		reenumerations++;
+		lastReenumerationMs = now;
 		MX_USB_DEVICE_DeInit();
 		ncm.configured = false;
 		restartAtMs = now + REENUMERATE_GAP_MS;
