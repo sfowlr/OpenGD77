@@ -27,27 +27,25 @@
 // gets the data sent to radio 0x0203. Sending from the host to x.y.2.3 reaches 0x0203 only.
 //   individual   12.0.0.0/8 (default)  DMR IDs. The host gets its own radio's ID by DHCP, so radio 10005 gives it
 //                                      12.0.39.21 (or 10.250.39.21 with 10.250.0.0/16)
-//   group        13.0.0.0/8            send to a talkgroup
-//   multicast    225.0.0.0/8           send to a talkgroup, and group data received over the air arrives here
-//   link         12.0.0.0/7            the subnet the host gets. It must hold the individual range, and if it also holds
-//                                      the group range the host needs no route at all to send to a talkgroup. Option 121
-//                                      adds routes for the multicast range and a group range that isn't on the link.
+//   multicast    225.0.0.0/8           talkgroups, both ways: send to 225.x.y.z for talkgroup x.y.z, and group data
+//                                      received over the air arrives there (join the group on the radio's interface)
+//   link         12.0.0.0/8            the subnet the host gets, it must hold the individual range. Option 121 adds the
+//                                      route for the multicast range (and the group range, if any, when it is off link)
+//   group        none (optional)       a unicast range for sending to talkgroups, e.g. 13.0.0.0/8 with a /7 link, for
+//                                      hosts or apps that can't use the multicast route. Define IPGW_GROUP_NET and
+//                                      IPGW_GROUP_PREFIX to have it.
 // The subnet broadcast address is the all call (16777215), for the DMR application ports 4000-4099 only. The radio
 // itself is the top individual address but one (12.255.255.254), so that DMR ID can't be used.
 #ifndef IPGW_INDIVIDUAL_NET
 #define IPGW_INDIVIDUAL_NET		0x0C000000u		// 12.0.0.0
 #define IPGW_INDIVIDUAL_PREFIX	8
 #endif
-#ifndef IPGW_GROUP_NET
-#define IPGW_GROUP_NET			0x0D000000u		// 13.0.0.0
-#define IPGW_GROUP_PREFIX		8
-#endif
 #ifndef IPGW_MULTICAST_NET
 #define IPGW_MULTICAST_NET		0xE1000000u		// 225.0.0.0
 #define IPGW_MULTICAST_PREFIX	8
 #endif
 #ifndef IPGW_LINK_PREFIX
-#define IPGW_LINK_PREFIX		7
+#define IPGW_LINK_PREFIX		8
 #endif
 
 #define IPGW_MASK(prefix)		(0xFFFFFFFFu << (32 - (prefix)))
@@ -56,8 +54,11 @@
 #define IPGW_BROADCAST_IP		((IPGW_INDIVIDUAL_NET & IPGW_NETMASK) | ~IPGW_NETMASK)
 #define IPGW_ALL_CALL_ID		0x00FFFFFFu
 
-_Static_assert((IPGW_INDIVIDUAL_PREFIX >= 8) && (IPGW_INDIVIDUAL_PREFIX <= 24) && (IPGW_GROUP_PREFIX >= 8) && (IPGW_GROUP_PREFIX <= 24) &&
+_Static_assert((IPGW_INDIVIDUAL_PREFIX >= 8) && (IPGW_INDIVIDUAL_PREFIX <= 24) &&
 				(IPGW_MULTICAST_PREFIX >= 8) && (IPGW_MULTICAST_PREFIX <= 24), "address ranges must be /8 to /24");
+#if defined(IPGW_GROUP_NET)
+_Static_assert((IPGW_GROUP_PREFIX >= 8) && (IPGW_GROUP_PREFIX <= 24), "address ranges must be /8 to /24");
+#endif
 _Static_assert((IPGW_LINK_PREFIX >= 1) && (IPGW_LINK_PREFIX <= IPGW_INDIVIDUAL_PREFIX) &&
 				((IPGW_GATEWAY_IP & IPGW_NETMASK) == (IPGW_INDIVIDUAL_NET & IPGW_NETMASK)), "the link must hold the individual range");
 _Static_assert((IPGW_MULTICAST_NET >> 28) == 0xE, "the multicast range must be in 224.0.0.0/4");

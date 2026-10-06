@@ -202,16 +202,17 @@ static uint8_t *putRoute(uint8_t *o, uint32_t network, int prefix)
 // to and joining a talkgroup picks this link, and the group range if it isn't on the link
 static uint8_t *putRoutes(uint8_t *o, uint8_t code)
 {
-	bool groupOnLink = (IPGW_LINK_PREFIX <= IPGW_GROUP_PREFIX) && ((IPGW_GROUP_NET & IPGW_NETMASK) == (IPGW_INDIVIDUAL_NET & IPGW_NETMASK));
 	uint8_t *start;
 
 	*o++ = code;
 	start = o++;
 	o = putRoute(o, IPGW_MULTICAST_NET, IPGW_MULTICAST_PREFIX);
-	if (!groupOnLink)
+#if defined(IPGW_GROUP_NET)
+	if ((IPGW_LINK_PREFIX > IPGW_GROUP_PREFIX) || ((IPGW_GROUP_NET & IPGW_NETMASK) != (IPGW_INDIVIDUAL_NET & IPGW_NETMASK)))
 	{
-		o = putRoute(o, IPGW_GROUP_NET, IPGW_GROUP_PREFIX);
+		o = putRoute(o, IPGW_GROUP_NET, IPGW_GROUP_PREFIX);// not on the link
 	}
+#endif
 	*start = o - start - 1;
 	return o;
 }
@@ -412,10 +413,12 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 		}
 		id = IPGW_ALL_CALL_ID;
 	}
+#if defined(IPGW_GROUP_NET)
 	else if (IN_RANGE(GROUP, dst))
 	{
 		id = ID(GROUP, dst);
 	}
+#endif
 	else if (IN_RANGE(MULTICAST, dst))
 	{
 		id = ID(MULTICAST, dst);
