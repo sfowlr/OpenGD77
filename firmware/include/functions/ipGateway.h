@@ -25,19 +25,20 @@
 // Addressing, chosen at compile time. Each range is a base address and a prefix length of 8 to 24 bits, and maps the
 // low bits of the address to a DMR ID. Bigger IDs are truncated: in a /16 radio 0x010203 is x.y.2.3, and its host also
 // gets the data sent to radio 0x0203. Sending from the host to x.y.2.3 reaches 0x0203 only.
-//   individual   12.0.0.0/8 (default)  DMR IDs. The host gets its own radio's ID by DHCP, so radio 10005 gives it
-//                                      12.0.39.21 (or 10.250.39.21 with 10.250.0.0/16)
+//   individual   11.0.0.0/8 (default)  DMR IDs. The host gets its own radio's ID by DHCP, so radio 10005 gives it
+//                                      11.0.39.21 (or 10.250.39.21 with 10.250.0.0/16). Over the air the packets keep
+//                                      the Motorola CAI addresses (12.x.y.z, 225.x.y.z), see dmrData.c
 //   multicast    225.0.0.0/8           talkgroups, both ways: send to 225.x.y.z for talkgroup x.y.z, and group data
 //                                      received over the air arrives there (join the group on the radio's interface)
-//   link         12.0.0.0/8            the subnet the host gets, it must hold the individual range. Option 121 adds the
+//   link         11.0.0.0/8            the subnet the host gets, it must hold the individual range. Option 121 adds the
 //                                      route for the multicast range (and the group range, if any, when it is off link)
-//   group        none (optional)       a unicast range for sending to talkgroups, e.g. 13.0.0.0/8 with a /7 link, for
-//                                      hosts or apps that can't use the multicast route. Define IPGW_GROUP_NET and
-//                                      IPGW_GROUP_PREFIX to have it.
+//   group        none (optional)       a unicast range for sending to talkgroups, for hosts or apps that can't use the
+//                                      multicast route, e.g. 10.251.0.0/16 next to 10.250.0.0/16 with a /15 link.
+//                                      Define IPGW_GROUP_NET and IPGW_GROUP_PREFIX to have it.
 // The subnet broadcast address is the all call (16777215), for the DMR application ports 4000-4099 only. The radio
-// itself is the top individual address but one (12.255.255.254), so that DMR ID can't be used.
+// itself is the top individual address but one (11.255.255.254), so that DMR ID can't be used.
 #ifndef IPGW_INDIVIDUAL_NET
-#define IPGW_INDIVIDUAL_NET		0x0C000000u		// 12.0.0.0
+#define IPGW_INDIVIDUAL_NET		0x0B000000u		// 11.0.0.0
 #define IPGW_INDIVIDUAL_PREFIX	8
 #endif
 #ifndef IPGW_MULTICAST_NET
