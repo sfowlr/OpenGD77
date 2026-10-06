@@ -1114,9 +1114,18 @@ static void getStatus(void)
 		buf[8] = hotspotDataSpace();
 	}
 
+#if defined(HOTSPOT_STATUS_DEBUG)
+	// Diagnostics in the unused YSF / P25 / NXDN space bytes
+	extern volatile int slotState;
+	buf[9]  = slotState;
+	buf[10] = (trxTransmissionEnabled ? 0x01 : 0) | (trxIsTransmitting ? 0x02 : 0) | (netTerminatorReceived ? 0x04 : 0) |
+			(hotspotDataIsBusy() ? 0x08 : 0) | (trxIsTransmittingDMR ? 0x10 : 0);
+	buf[11] = hotspotState;
+#else
 	buf[9]  = 0; // No YSF space
 	buf[10] = 0; // No P25 space
 	buf[11] = 0; // no NXDN space
+#endif
 	buf[12] = 1; // virtual space for POCSAG
 
 	if (!hotspotMmdvmHostIsConnected)

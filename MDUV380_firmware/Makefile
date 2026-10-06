@@ -37,6 +37,7 @@ INCS := Middlewares/Third_Party/FreeRTOS/Source/include application/include \
 ARCH   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
 CFLAGS := $(ARCH) -std=gnu11 -Os -g3 -ffunction-sections -fdata-sections -fstack-usage -Wall \
           -Wno-format -Wno-format-truncation -Wno-stringop-overflow $(DEFS) $(addprefix -I,$(INCS))
+CFLAGS += $(EXTRA_CFLAGS)
 ASFLAGS := $(ARCH) -g3 -x assembler-with-cpp $(DEFS) $(addprefix -I,$(INCS))
 LDFLAGS := $(ARCH) -T STM32F405VGTX_FLASH.ld --specs=nosys.specs --specs=nano.specs -Wl,--gc-sections -static \
            -Wl,-Map=$(BUILD)/firmware.map -Wl,--start-group -lc -lm -Wl,--end-group

@@ -20,6 +20,7 @@
 #include "usbd_ioreq.h"
 #include "usb/usb_ncm.h"
 #include "functions/ipGateway.h"
+#include "functions/ticks.h"
 
 #define NCM_COMM_INTERFACE				0
 #define NCM_DATA_INTERFACE				1
@@ -124,7 +125,11 @@ typedef struct
 	uint32_t ntbInputSize;
 	uint8_t pendingRequest;			// class request waiting for its OUT data stage
 	volatile uint8_t notifyPending;	// notifications still to send after the link comes up
+	volatile bool notifyBusy;		// a notification is on the interrupt endpoint
+	volatile uint32_t notifySentMs;
 } usbNcm_t;
+
+#define NOTIFY_REPEAT_MS	1000	// until the host selects the data alternate setting
 
 static usbNcm_t ncm;
 static USBD_HandleTypeDef *ncmDevice;
@@ -189,6 +194,8 @@ static void sendNotification(uint8_t code)
 	put16(&notification[6], (code == NCM_NOTIFY_SPEED_CHANGE) ? 8 : 0);
 	put32(&notification[8], REPORTED_SPEED);// downlink
 	put32(&notification[12], REPORTED_SPEED);// uplink
+	ncm.notifyBusy = true;
+	ncm.notifySentMs = ticksGetMillis();
 	USBD_LL_Transmit(ncmDevice, NCM_NOTIFY_EP, notification, (code == NCM_NOTIFY_SPEED_CHANGE) ? 16 : 8);
 }
 
@@ -383,6 +390,7 @@ static uint8_t ncmDataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
 {
 	if (epnum == (NCM_NOTIFY_EP & 0x0F))
 	{
+		ncm.notifyBusy = false;
 		if (ncm.notifyPending && ncm.configured)
 		{
 			ncm.notifyPending = 0;
@@ -519,8 +527,34 @@ bool usbNcmSendFrame(const uint8_t *frame, int length)
 
 // Hands the datagrams of the received NTB to the gateway, one at a time while the IN endpoint is free
 // (each one may need a reply), then re-arms the OUT endpoint
+// The announcement at configuration can be lost (seen at power on with macOS, which then waits for it for ever), so
+// it is repeated until the host selects the data alternate setting. Linux and Windows select it first.
+static void repeatNotification(void)
+{
+	if (!ncm.configured || (ncm.dataAlternate != 0) || ((ticksGetMillis() - ncm.notifySentMs) < NOTIFY_REPEAT_MS))
+	{
+		return;
+	}
+
+	HAL_NVIC_DisableIRQ(OTG_FS_IRQn);
+	if (ncm.configured && (ncm.dataAlternate == 0))
+	{
+		if (ncm.notifyBusy)
+		{
+			// Never collected: start the endpoint again
+			USBD_LL_CloseEP(ncmDevice, NCM_NOTIFY_EP);
+			USBD_LL_OpenEP(ncmDevice, NCM_NOTIFY_EP, USBD_EP_TYPE_INTR, NCM_NOTIFY_PACKET_SIZE);
+		}
+		ncm.notifyPending = 1;
+		sendNotification(NCM_NOTIFY_SPEED_CHANGE);
+	}
+	HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
+}
+
 void usbNcmTick(void)
 {
+	repeatNotification();
+
 	if (!ncm.outReady)
 	{
 		return;
