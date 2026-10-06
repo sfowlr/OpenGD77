@@ -113,12 +113,14 @@ uint32_t dmrDataCRC32(const uint8_t *data, int length);
 
 // TX builders. Each returns the number of bursts written to out, or 0 if the data does not fit
 int dmrDataBuildCSBK(const uint8_t csbk[10], dmrBurst_t *out);
+// blockType: DT_RATE_12_DATA, DT_RATE_34_DATA or DT_RATE_1_DATA
+int dmrDataBlockLength(uint8_t blockType);
 int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint32_t src,
-						const uint8_t *data, int length, int preambles, dmrBurst_t *out, int maxBursts);
+						const uint8_t *data, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
-						const uint8_t *payload, int length, int preambles, dmrBurst_t *out, int maxBursts);
+						const uint8_t *payload, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
-						int preambles, dmrBurst_t *out, int maxBursts);
+						uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildResponseAck(uint8_t sap, uint32_t dst, uint32_t src, uint8_t sendSeq, dmrBurst_t *out);
 int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *out, int maxBursts);
 
