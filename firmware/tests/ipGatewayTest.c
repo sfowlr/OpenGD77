@@ -194,14 +194,14 @@ static void testARP(void)
 	uint8_t a[28] = { 0, 1, 8, 0, 6, 4, 0, 1 };
 	memcpy(a + 8, HOST_MAC, 6);
 	put32(&a[14], HOST_IP);
-	put32(&a[24], IPGW_GROUP_NET | 9);// a talkgroup
+	put32(&a[24], IPGW_INDIVIDUAL_NET | 9);// another radio
 	memcpy(f + 14, a, 28);
 
 	in(f, 42);
 	CHECK(framesSent == 1);
 	CHECK(lastFrame[21] == 2);// reply
 	CHECK(memcmp(&lastFrame[22], GW_MAC, 6) == 0);
-	CHECK(get32(&lastFrame[28]) == (IPGW_GROUP_NET | 9));
+	CHECK(get32(&lastFrame[28]) == (IPGW_INDIVIDUAL_NET | 9));
 
 	// Address conflict probe (sender 0.0.0.0) for the host's own address: no reply
 	memset(f + 28, 0, 4);
@@ -240,7 +240,11 @@ static void testToAir(void)
 	CHECK(air.calls == 1 && !air.group && air.dst == 235 && air.srcPort == 4001 && air.dstPort == 4001);
 	CHECK(air.length == sizeof(lrrp) && memcmp(air.payload, lrrp, sizeof(lrrp)) == 0);
 
-	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GROUP_NET | 9, 5000, 4007, lrrp, 4));// to 13.0.0.9
+#if defined(IPGW_GROUP_NET)
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GROUP_NET | 9, 5000, 4007, lrrp, 4));// to the unicast group range
+#else
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_MULTICAST_NET | 9, 5000, 4007, lrrp, 4));// to 225.0.0.9
+#endif
 	CHECK(air.calls == 2 && air.group && air.dst == 9 && air.srcPort == 5000 && air.dstPort == 4007);
 
 	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_MULTICAST_NET | 10, 5000, 4007, lrrp, 4));// to 225.0.0.10
