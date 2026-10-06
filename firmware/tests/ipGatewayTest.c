@@ -71,6 +71,20 @@ bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort
 	return true;
 }
 
+static struct
+{
+	int calls;
+	uint8_t data[64];
+	int length;
+} serial;
+
+void ipGatewaySerialIn(const uint8_t *data, int length)
+{
+	serial.calls++;
+	memcpy(serial.data, data, length);
+	serial.length = length;
+}
+
 uint32_t ipGatewayRadioId(void)
 {
 	return radioId;
@@ -284,6 +298,28 @@ static void testDeliver(void)
 	CHECK(lastFrame[36] == (IPGW_MONITOR_PORT >> 8) && lastFrame[37] == (IPGW_MONITOR_PORT & 0xFF));
 }
 
+// MMDVMHost's UDP modem protocol: datagrams to the radio's port 3334 carry the serial byte stream, replies go back
+static void testSerial(void)
+{
+	uint8_t f[200];
+	const uint8_t getVersion[] = { 0xE0, 0x03, 0x00 };
+
+	CHECK(ipGatewaySerialOut(getVersion, 3));// nobody to send to yet: dropped, not busy
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GATEWAY_IP, 3335, IPGW_SERIAL_PORT, getVersion, sizeof(getVersion)));
+	CHECK(serial.calls == 1 && serial.length == 3 && memcmp(serial.data, getVersion, 3) == 0);
+	CHECK(framesSent == 0 && air.calls == 4);// not over the air
+
+	const uint8_t reply[] = { 0xE0, 0x04, 0x70, 0x00 };
+	CHECK(ipGatewaySerialOut(reply, sizeof(reply)));
+	CHECK(get32(&lastFrame[26]) == IPGW_GATEWAY_IP && get32(&lastFrame[30]) == HOST_IP);
+	CHECK(lastFrame[34] == (IPGW_SERIAL_PORT >> 8) && lastFrame[35] == (IPGW_SERIAL_PORT & 0xFF));
+	CHECK(lastFrame[36] == (3335 >> 8) && lastFrame[37] == (3335 & 0xFF));
+	CHECK(memcmp(&lastFrame[42], reply, sizeof(reply)) == 0);
+
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_GATEWAY_IP, 3335, 4001, getVersion, sizeof(getVersion)));// other ports: nothing
+	CHECK(serial.calls == 1 && framesSent == 0);
+}
+
 static void testIdChange(void)
 {
 	if (!FITS_INDIVIDUAL(0x010000))
@@ -314,6 +350,7 @@ int main(void)
 	testPing();
 	testToAir();
 	testDeliver();
+	testSerial();
 	testIdChange();
 
 	fclose(pcap);

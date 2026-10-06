@@ -66,6 +66,10 @@ _Static_assert((IPGW_MULTICAST_NET >> 28) == 0xE, "the multicast range must be i
 // version (1), timeslot (1-2), colour code, DT, flags (dmrBurst_t), length, payload.
 #define IPGW_MONITOR_PORT	40077
 
+// UDP to the radio itself on this port carries the radio's serial protocol, so that MMDVMHost (Modem Protocol=udp,
+// ModemAddress = the radio, ModemPort = 3334) and the CPS style 'D' commands also work without a serial port
+#define IPGW_SERIAL_PORT	3334
+
 #define IPGW_MAX_FRAME		600				// largest Ethernet frame handled, bigger datagrams can't go over the air anyway
 
 // No hardware dependencies, so the gateway can be unit tested on a host (see firmware/tests)
@@ -85,9 +89,14 @@ bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPor
 // A monitor record (see IPGW_MONITOR_PORT) to the host
 bool ipGatewayDeliverMonitor(const uint8_t *record, int length);
 
+// Bytes from the radio's serial protocol, as one UDP datagram to the host and port that last sent to IPGW_SERIAL_PORT.
+// False if the USB IN endpoint is busy; dropped (true) while no host has sent anything yet.
+bool ipGatewaySerialOut(const uint8_t *data, int length);
+
 // Provided by the user of the gateway
 bool ipGatewaySendFrame(const uint8_t *frame, int length);
 uint32_t ipGatewayRadioId(void);
+void ipGatewaySerialIn(const uint8_t *data, int length);
 bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length);
 
 #endif

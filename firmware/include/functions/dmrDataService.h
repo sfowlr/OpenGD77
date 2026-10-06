@@ -43,6 +43,9 @@ int dmrDataServiceInboxCount(void);
 bool dmrDataServiceInboxPop(dmrDataMessage_t *message);
 
 // Raw received bursts kept for the host (USB 'D' commands)
+// The TX burst list (DMR_DATA_MAX_BURSTS), lent to the hotspot: the service never transmits in hotspot mode
+dmrBurst_t *dmrDataServiceTxBursts(void);
+
 int dmrDataServiceRxBurstCount(void);
 bool dmrDataServiceRxBurstPop(dmrBurst_t *burst);
 

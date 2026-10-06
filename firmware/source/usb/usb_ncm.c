@@ -464,3 +464,8 @@ bool ipGatewaySendFrame(const uint8_t *frame, int length)
 {
 	return usbNcmSendFrame(frame, length);
 }
+
+// The MK22 composite device keeps its USB serial port, so the serial protocol isn't tunnelled over UDP here
+void ipGatewaySerialIn(const uint8_t *data, int length)
+{
+}
