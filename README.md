@@ -17,6 +17,8 @@ current source only as zip files on opengd77.com; each release is imported uncha
 
 | Branch | Contents |
 | --- | --- |
+| `combined-main` | the two releases R20260131 side by side, unchanged (merge of `gd77-main` and `dm1701-main`) |
+| `combined-dmr-packet-data` | `combined-main` plus the work, with the code both trees share in `shared/` (the main work branch) |
 | `main` | open-ham/OpenGD77 unchanged: the 2022 MK22 code (GD-77, GD-77S, DM-1801, RD-5R) |
 | `gd77-main` | `main` plus the MK22 release R20260131 (`OPENGD77_20260131.zip`), unchanged |
 | `gd77-dmr-packet-data` | `gd77-main` plus DMR packet data, a USB network adapter (CDC-NCM) and MMDVM hotspot fixes |
