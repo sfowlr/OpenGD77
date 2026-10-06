@@ -47,6 +47,7 @@ static uint8_t hostMac[6];
 static uint8_t monitorMac[6];				// a unicast address the host doesn't have, for traffic between other radios
 DMR_DATA_BUFFER static uint8_t tx[IPGW_MAX_FRAME];
 static uint16_t ipId = 0;
+static uint16_t serialPeerPort = 0;		// host port of the serial protocol, 0 until the host has sent to IPGW_SERIAL_PORT
 
 static const uint8_t BROADCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
@@ -391,6 +392,16 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 
 	uint16_t dstPort = get16(&l4[2]);
 	bool group = true;
+
+	if (dst == IPGW_GATEWAY_IP)
+	{
+		if (dstPort == IPGW_SERIAL_PORT)
+		{
+			serialPeerPort = get16(&l4[0]);
+			ipGatewaySerialIn(&l4[8], udpLength - 8);
+		}
+		return;
+	}
 	uint32_t id;
 
 	if ((dst == IPGW_BROADCAST_IP) || (dst == 0xFFFFFFFF))
@@ -482,6 +493,17 @@ bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPor
 	}
 
 	return sendUDP(dstMac, srcIp, dstIp, srcPort, dstPort, payload, length);
+}
+
+bool ipGatewaySerialOut(const uint8_t *data, int length)
+{
+	uint32_t hostIp = ipGatewayHostIP();
+
+	if ((serialPeerPort == 0) || (hostIp == 0))
+	{
+		return true;// nobody to send it to
+	}
+	return sendUDP(hostMac, IPGW_GATEWAY_IP, hostIp, IPGW_SERIAL_PORT, serialPeerPort, data, length);
 }
 
 bool ipGatewayDeliverMonitor(const uint8_t *record, int length)

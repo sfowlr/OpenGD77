@@ -31,6 +31,12 @@
 usb_status_t USB_DeviceNcmInit(uint8_t controllerId, usb_device_class_config_struct_t *config, class_handle_t *handle);
 usb_status_t USB_DeviceNcmDeinit(class_handle_t handle);
 usb_status_t USB_DeviceNcmEvent(void *handle, uint32_t event, void *param);
+#elif defined(STM32F405xx)
+#include "usbd_def.h"
+
+// ST USB device library class, registered instead of USBD_CDC in network mode (see usb_device.c)
+extern USBD_ClassTypeDef USBD_NCM;
+void usbNcmSetMacAddress(const uint8_t hostMac[6]);
 #endif
 
 // True once the host has selected the data interface alternate setting 1 (the link is up)

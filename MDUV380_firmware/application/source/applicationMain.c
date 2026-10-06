@@ -427,6 +427,9 @@ void applicationMainTask(void)
 
 	wasRestoringDefaultsettings = settingsLoadSettings(((buttons & BUTTON_SK2) != 0));
 
+	usbNetworkMode = settingsIsOptionBitSet(BIT_USB_NETWORK);
+	MX_USB_DEVICE_Init();
+
 	displayInit(settingsIsOptionBitSet(BIT_INVERSE_VIDEO), true);
 	gpioInitDisplay();
 

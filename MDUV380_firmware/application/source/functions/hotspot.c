@@ -2072,8 +2072,7 @@ static void storeNetFrame(volatile const uint8_t *comBuffer)
 }
 
 // Packet data and signalling from MMDVMHost (CSBK, data headers and blocks) is not voice.
-// It is collected into a burst list and sent with the HR-C6000 data TX path, bits unchanged.
-DMR_DATA_BUFFER static dmrBurst_t netDataBursts[DMR_DATA_MAX_BURSTS];
+// It is collected into the data service's burst list and sent with the HR-C6000 data TX path, bits unchanged.
 static int netDataCount = 0;
 static int netDataExpected = 0;
 static bool netDataSending = false;
@@ -2092,7 +2091,7 @@ static bool hotspotQueueNetData(uint8_t dataType, const uint8_t *frame)
 		return false;
 	}
 
-	dmrBurst_t *burst = &netDataBursts[netDataCount++];
+	dmrBurst_t *burst = &dmrDataServiceTxBursts()[netDataCount++];
 	dmrDataFrameToBurst(dataType, frame, burst);
 
 	// How many bursts belong to this transmission, so that it can start without waiting for the gap
@@ -2165,7 +2164,7 @@ static void hotspotDataTick(void)
 		// Only from the idle receive state, never in the middle of a voice transmission
 		if ((hotspotState == HOTSPOT_STATE_RX_PROCESS) && (rfFrameBufCount == 0) && !trxTransmissionEnabled)
 		{
-			netDataSending = HRC6000DataTxStart(netDataBursts, netDataCount);
+			netDataSending = HRC6000DataTxStart(dmrDataServiceTxBursts(), netDataCount);
 		}
 
 		if (!netDataSending && ((ticksGetMillis() - netDataLastTime) > 2000))

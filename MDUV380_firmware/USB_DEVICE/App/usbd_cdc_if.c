@@ -21,6 +21,8 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc_if.h"
+#include "usb_device.h"
+#include "functions/ipGateway.h"
 
 /* USER CODE BEGIN INCLUDE */
 #include "usb/usb_com.h"
@@ -278,10 +280,9 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
   * @param  Len: Number of data received (in bytes)
   * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
   */
-static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
+// The serial protocol, from the CDC OUT endpoint, or in network mode from UDP (see ipGatewaySerialIn)
+static void comReceive(uint8_t* Buf, int32_t recvSize)
 {
-  /* USER CODE BEGIN 6 */
-	int32_t recvSize = *Len;
 
 	if (recvSize > 0)
 	{
@@ -428,7 +429,10 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 										gpsLoggingStop();
 #endif
 										gpsDataInputStartStop(false);
-										(void)USBD_LL_FlushEP(&hUsbDeviceFS, CDC_OUT_EP);
+										if (!usbNetworkMode)
+										{
+											(void)USBD_LL_FlushEP(&hUsbDeviceFS, CDC_OUT_EP);
+										}
 									}
 #endif
 
@@ -481,6 +485,18 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 		}
 	}
 
+}
+
+void ipGatewaySerialIn(const uint8_t *data, int length)
+{
+	comReceive((uint8_t *)data, length);
+}
+
+static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
+{
+  /* USER CODE BEGIN 6 */
+	comReceive(Buf, *Len);
+
 	USBD_CDC_SetRxBuffer(&hUsbDeviceFS, UserRxBufferFS); // Reset the RX buffer.
 	USBD_CDC_ReceivePacket(&hUsbDeviceFS); // Prepare for the next reception.
 
@@ -503,11 +519,16 @@ uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 {
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 7 */
+  if (usbNetworkMode)
+  {
+	  return ipGatewaySerialOut(Buf, Len) ? USBD_OK : USBD_BUSY;
+  }
+
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
 
   uint32_t maxLen = SAFE_MIN(Len, sizeof(UserTxBufferFS));
 
-  if (hcdc->TxState != 0){
+  if ((hcdc == NULL) || (hcdc->TxState != 0)){
 	  return USBD_BUSY;
   }
 

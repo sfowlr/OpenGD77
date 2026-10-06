@@ -1120,7 +1120,7 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
+  // MX_USB_DEVICE_Init() is called by applicationMainTask() once the settings say serial port or network adapter
   /* USER CODE BEGIN 5 */
 	applicationMainTask();
   /* USER CODE END 5 */

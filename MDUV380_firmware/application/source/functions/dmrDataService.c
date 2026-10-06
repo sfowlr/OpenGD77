@@ -369,6 +369,11 @@ bool dmrDataServiceInboxPop(dmrDataMessage_t *message)
 	return true;
 }
 
+dmrBurst_t *dmrDataServiceTxBursts(void)
+{
+	return txBursts;
+}
+
 int dmrDataServiceRxBurstCount(void)
 {
 	return (rxBurstWriteIdx + RX_BURST_QUEUE_SIZE - rxBurstReadIdx) % RX_BURST_QUEUE_SIZE;

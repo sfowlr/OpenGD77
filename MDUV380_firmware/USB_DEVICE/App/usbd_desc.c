@@ -67,6 +67,7 @@
 #define USBD_LANGID_STRING     1033
 #define USBD_MANUFACTURER_STRING     "www.opengd77.com"
 #define USBD_PID_FS     148
+#define USBD_PID_FS_NETWORK     0x0096
 
 #if defined(PLATFORM_MDUV380)
 #if defined(PLATFORM_VARIANT_UV380_PLUS_10W)
@@ -271,6 +272,17 @@ __ALIGN_BEGIN uint8_t USBD_StringSerial[USB_SIZ_STRING_SERIAL] __ALIGN_END = {
   * @param  length : Pointer to data length variable
   * @retval Pointer to descriptor buffer
   */
+// The network adapter is a separate product (Windows remembers drivers by VID/PID), and its two interfaces are one
+// function grouped by an IAD (class EF / 02 / 01)
+void USBD_FS_SetNetworkMode(bool network)
+{
+  USBD_FS_DeviceDesc[4] = network ? 0xEF : 0x02;
+  USBD_FS_DeviceDesc[5] = 0x02;
+  USBD_FS_DeviceDesc[6] = network ? 0x01 : 0x00;
+  USBD_FS_DeviceDesc[10] = LOBYTE(network ? USBD_PID_FS_NETWORK : USBD_PID_FS);
+  USBD_FS_DeviceDesc[11] = HIBYTE(network ? USBD_PID_FS_NETWORK : USBD_PID_FS);
+}
+
 uint8_t * USBD_FS_DeviceDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
 {
   UNUSED(speed);

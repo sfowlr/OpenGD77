@@ -80,6 +80,26 @@ ID from Microsoft OS 1.0 descriptors (string 0xEE "MSFT100", vendor code 0x47, E
 its UsbNcm driver; the serial port binds to the built in usbser driver and gets a new COM port number. The Linux
 udev rules include PID 0x0095 and tell ModemManager to leave the radio alone.
 
+### MD-UV380 / DM-1701 / RT-84 (STM32F405)
+
+The STM32F405 USB controller has too few endpoints for the serial port and the network adapter together, so these
+radios are one or the other: Menu > Options > General > USB: Serial / Network (switches straight away, saved in
+`BIT_USB_NETWORK`). In network mode the radio is VID 0x1FC9 PID 0x0096, a CDC-NCM adapter alone (with an IAD and the
+same Microsoft OS 1.0 descriptors), and the serial protocol is tunnelled over UDP: datagrams to the radio's address
+(12.255.255.254) port 3334 are handled exactly like data on the serial port, and replies go back to the sender.
+That covers MMDVMHost and the `D` commands. MMDVMHost's settings for it:
+
+```
+[Modem]
+Protocol=udp
+ModemAddress=12.255.255.254
+ModemPort=3334
+LocalAddress=12.0.39.21   # the address the PC got by DHCP (its radio's DMR ID)
+LocalPort=3335
+```
+
+The CPS needs serial mode.
+
 ## Host tests
 
 `make -C firmware/tests` builds the packet layer and the network gateway natively and runs their tests. The packet
