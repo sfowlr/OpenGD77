@@ -13,6 +13,13 @@ all: run
 dmrDataTest: $(SOURCES) ../include/functions/dmrData.h ../include/hotspot/dmrDataFrame.h
 	$(CC) $(CFLAGS) -o $@ $(SOURCES)
 
+HSDATA  := hotspotDataTest.c ../source/hotspot/hotspotData.c ../source/functions/dmrData.c ../source/hotspot/dmrDataFrame.c \
+           ../source/hotspot/BPTC19696.c ../source/hotspot/Hamming.c ../source/hotspot/DMRSlotType.c ../source/hotspot/CRC.c \
+           ../source/hotspot/dmrUtils.c ../source/hotspot/dmrDefines.c
+
+hotspotDataTest: $(HSDATA) ../include/hotspot/hotspotData.h
+	$(CC) $(CFLAGS) -o $@ $(HSDATA)
+
 ipGatewayTest: ipGatewayTest.c ../source/functions/ipGateway.c ../include/functions/ipGateway.h
 	$(CC) $(CFLAGS) -o $@ ipGatewayTest.c ../source/functions/ipGateway.c
 
@@ -30,8 +37,9 @@ ipGatewayTest31: ipGatewayTest.c ../source/functions/ipGateway.c ../include/func
 ipGatewayTestShared: ipGatewayTest.c ../source/functions/ipGateway.c ../include/functions/ipGateway.h
 	$(CC) $(CFLAGS) -DIPGW_LINK_PREFIX=8 '-DPCAP_NAME="ipGatewayTestShared.pcap"' -o $@ ipGatewayTest.c ../source/functions/ipGateway.c
 
-run: dmrDataTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared
+run: dmrDataTest hotspotDataTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared
 	./dmrDataTest > dmrDataTest.out; status=$$?; grep -E "^(FAIL|# (PASSED|FAILED))" dmrDataTest.out; exit $$status
+	./hotspotDataTest
 	./ipGatewayTest
 	./ipGatewayTest16
 	./ipGatewayTest31
@@ -43,6 +51,6 @@ ifneq ($(TSHARK),)
 endif
 
 clean:
-	rm -f dmrDataTest dmrDataTest.out ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTest31.pcap ipGatewayTestShared.pcap ipGatewayTest.expert
+	rm -f dmrDataTest dmrDataTest.out hotspotDataTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTest31.pcap ipGatewayTestShared.pcap ipGatewayTest.expert
 
 .PHONY: all run clean
