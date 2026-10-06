@@ -3,8 +3,8 @@
  *
  * Ethernet, ARP (on a /31 for the radio's address, on a shared link for every address but the host's), ICMP echo to the
  * radio's address,
- * a DHCP server with a single lease, and ICMP, UDP and SCTP between the host and DMR IDs / talkgroups (addressing in
- * ipGateway.h). No TCP or other protocols, no fragments.
+ * a DHCP server with a single lease, ICMP, UDP and SCTP between the host and DMR IDs / talkgroups (addressing in
+ * ipGateway.h), and raw DMR data on IPGW_RAW_PORT. No TCP or other protocols, no fragments.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -446,7 +446,7 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 
 	if ((dst == IPGW_ALL_CALL_IP) || (dst == IPGW_BROADCAST_IP) || (dst == 0xFFFFFFFF))
 	{
-		if ((ip[9] != IP_PROTO_UDP) || (dstPort < DMR_APP_PORT_FIRST) || (dstPort > DMR_APP_PORT_LAST))
+		if ((ip[9] != IP_PROTO_UDP) || (((dstPort < DMR_APP_PORT_FIRST) || (dstPort > DMR_APP_PORT_LAST)) && (dstPort != IPGW_RAW_PORT)))
 		{
 			return;
 		}
@@ -469,6 +469,15 @@ void ipGatewayEthernetIn(const uint8_t *frame, int length)
 	}
 	else
 	{
+		return;
+	}
+
+	if ((ip[9] == IP_PROTO_UDP) && (dstPort == IPGW_RAW_PORT))
+	{
+		if (l4Length > 8)
+		{
+			ipGatewayRawToAir(group, id, &l4[8], l4Length - 8);
+		}
 		return;
 	}
 
@@ -577,6 +586,11 @@ bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPor
 	put16(&udp[0], srcPort);
 	put16(&udp[2], dstPort);
 	return deliver(group, dst, src, IP_PROTO_UDP, 8 + length);
+}
+
+bool ipGatewayDeliverRaw(bool group, uint32_t dst, uint32_t src, const uint8_t *data, int length)
+{
+	return ipGatewayDeliverUDP(group, dst, src, IPGW_RAW_PORT, IPGW_RAW_PORT, data, length);
 }
 
 bool ipGatewaySerialOut(const uint8_t *data, int length)

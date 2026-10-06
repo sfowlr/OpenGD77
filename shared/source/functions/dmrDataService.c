@@ -248,6 +248,18 @@ bool ipGatewayIPToAir(bool group, uint32_t dst, uint8_t protocol, const uint8_t 
 									txBursts, DMR_DATA_MAX_BURSTS));
 }
 
+// USB network gateway: the payload of a datagram to IPGW_RAW_PORT, as the user data of a short data packet
+bool ipGatewayRawToAir(bool group, uint32_t dst, const uint8_t *data, int length)
+{
+	if (dmrDataServiceIsBusy() || !canTransmit())
+	{
+		return false;
+	}
+
+	return queueTx(dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_SHORT_DATA, group, dst, trxDMRID, data, length,
+										DT_RATE_12_DATA, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+}
+
 static bool isForUs(const dmrDataPacket_t *packet)
 {
 	if (packet->src == trxDMRID)
@@ -283,7 +295,8 @@ static void handlePacket(const dmrDataPacket_t *packet)
 	bool isUDP = dmrDataGetUDP(packet, &udp);
 
 	// ICMP, UDP and SCTP go to the USB network host, also between other radios so that a capture shows them. UDP is
-	// rebuilt from its ports and payload (it may have come with a compressed header, SAP 3)
+	// rebuilt from its ports and payload (it may have come with a compressed header, SAP 3). Data that isn't IP based
+	// goes as the payload of a datagram to IPGW_RAW_PORT
 	if ((packet->src != trxDMRID) && usbNcmIsUp() && !airToHostPending)
 	{
 		dmrDataIP_t ip;
@@ -306,6 +319,20 @@ static void handlePacket(const dmrDataPacket_t *packet)
 			airToHost.protocol = ip.protocol;
 			memcpy(airToHost.l4, ip.payload, ip.length);
 			airToHost.length = ip.length;
+			airToHostPending = true;
+		}
+		else if (((packet->dpf == DMR_DPF_UNCONFIRMED) || (packet->dpf == DMR_DPF_CONFIRMED)) &&
+					(packet->sap != DMR_SAP_IP) && (packet->sap != DMR_SAP_UDPIP_COMPRESSION) &&
+					(packet->length > 0) && ((8 + packet->length) <= (int)sizeof(airToHost.l4)))
+		{
+			airToHost.protocol = DMR_IP_PROTO_UDP;
+			airToHost.l4[0] = IPGW_RAW_PORT >> 8;
+			airToHost.l4[1] = IPGW_RAW_PORT & 0xFF;
+			airToHost.l4[2] = IPGW_RAW_PORT >> 8;
+			airToHost.l4[3] = IPGW_RAW_PORT & 0xFF;
+			memset(&airToHost.l4[4], 0, 4);
+			memcpy(&airToHost.l4[8], packet->data, packet->length);
+			airToHost.length = 8 + packet->length;
 			airToHostPending = true;
 		}
 

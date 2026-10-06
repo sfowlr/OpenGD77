@@ -85,6 +85,25 @@ bool ipGatewayIPToAir(bool group, uint32_t dst, uint8_t protocol, const uint8_t 
 static struct
 {
 	int calls;
+	bool group;
+	uint32_t dst;
+	uint8_t data[600];
+	int length;
+} raw;
+
+bool ipGatewayRawToAir(bool group, uint32_t dst, const uint8_t *data, int length)
+{
+	raw.calls++;
+	raw.group = group;
+	raw.dst = dst;
+	memcpy(raw.data, data, length);
+	raw.length = length;
+	return true;
+}
+
+static struct
+{
+	int calls;
 	uint8_t data[64];
 	int length;
 } serial;
@@ -461,6 +480,37 @@ static void testSerial(void)
 	CHECK(serial.calls == 1 && framesSent == 0);
 }
 
+// Raw DMR data: the payload of a datagram to IPGW_RAW_PORT goes over the air without the IP and UDP headers, and back
+static void testRaw(void)
+{
+	uint8_t f[600];
+	const uint8_t mqttsn[] = { 0x02, 0x16 };// MQTT-SN PINGREQ
+	int airCalls = air.calls;
+
+	framesSent = 0;
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_INDIVIDUAL_NET | 9990, 50000, IPGW_RAW_PORT, mqttsn, sizeof(mqttsn)));
+	CHECK(!raw.group && raw.dst == 9990 && raw.length == 2 && memcmp(raw.data, mqttsn, 2) == 0);
+	int calls = raw.calls;
+
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_MULTICAST_NET | 9, 50000, IPGW_RAW_PORT, mqttsn, sizeof(mqttsn)));
+	CHECK(raw.calls == calls + 1 && raw.group && raw.dst == 9);
+	in(f, hostUdp(f, BCAST_MAC, HOST_IP, 0xFFFFFFFF, 50000, IPGW_RAW_PORT, mqttsn, sizeof(mqttsn)));// the all call
+	CHECK(raw.calls == calls + 2 && raw.group && raw.dst == IPGW_ALL_CALL_ID);
+	in(f, hostUdp(f, GW_MAC, HOST_IP, IPGW_INDIVIDUAL_NET | 9990, 50000, IPGW_RAW_PORT, mqttsn, 0));// empty: dropped
+	in(f, hostUdp(f, GW_MAC, HOST_IP + 2, IPGW_INDIVIDUAL_NET | 9990, 50000, IPGW_RAW_PORT, mqttsn, sizeof(mqttsn)));// not the host
+	CHECK(raw.calls == calls + 2);
+	CHECK(air.calls == airCalls && framesSent == 0);// never as IP
+
+	const uint8_t reply[] = { 0x02, 0x17 };// PINGRESP
+	CHECK(ipGatewayDeliverRaw(false, RADIO_ID, 9990, reply, sizeof(reply)));
+	CHECK(memcmp(lastFrame, HOST_MAC, 6) == 0 && lastFrame[23] == 17);
+	CHECK(get32(&lastFrame[26]) == (IPGW_INDIVIDUAL_NET | 9990) && get32(&lastFrame[30]) == HOST_IP);
+	CHECK(lastFrame[34] == (IPGW_RAW_PORT >> 8) && lastFrame[35] == (IPGW_RAW_PORT & 0xFF));
+	CHECK(lastFrame[36] == (IPGW_RAW_PORT >> 8) && lastFrame[37] == (IPGW_RAW_PORT & 0xFF));
+	CHECK(lastFrame[39] == 10 && memcmp(&lastFrame[42], reply, 2) == 0);
+	CHECK(sum16(&lastFrame[34], 10, (HOST_IP >> 16) + (HOST_IP & 0xFFFF) + (IPGW_INDIVIDUAL_NET >> 16) + 9990 + 17 + 10) == 0);
+}
+
 static void testIdChange(void)
 {
 	if (!FITS_INDIVIDUAL(0x010000))
@@ -494,6 +544,7 @@ int main(void)
 	testDeliver();
 	testSerial();
 	testOtherProtocols();
+	testRaw();
 	testIdChange();
 
 	fclose(pcap);

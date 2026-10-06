@@ -556,7 +556,7 @@ bool dmrDataGetUDP(const dmrDataPacket_t *packet, dmrDataUDP_t *udp)
 			udp->length = udpLen - 8;
 		}
 	}
-	else if (packet->sap == 0x03)// UDP/IP header compression
+	else if (packet->sap == DMR_SAP_UDPIP_COMPRESSION)
 	{
 		if (len < 5)
 		{

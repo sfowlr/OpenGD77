@@ -92,6 +92,14 @@ _Static_assert((IPGW_MULTICAST_NET >> 28) == 0xE, "the multicast range must be i
 // ModemAddress = ipGatewayRadioIP(), ModemPort = 3334) and the CPS style 'D' commands also work without a serial port
 #define IPGW_SERIAL_PORT	3334
 
+// Raw DMR data, without the IP and UDP headers (28 bytes, about 2½ Rate 1/2 blocks, less air time). A UDP datagram from
+// the host to any radio ID's or talkgroup's address on this port goes over the air as just its payload: the user data
+// of an unconfirmed Rate 1/2 packet with SAP 10 (short data), up to 440 bytes. Unconfirmed or confirmed packets
+// received over the air that aren't IP based (any SAP but 3 and 4) come to the host the same way, as the payload of a
+// datagram from the sender's address to the host's (or the talkgroup's multicast address), both ports this one. The all
+// call works here too.
+#define IPGW_RAW_PORT		40078
+
 #define IPGW_MAX_FRAME		600				// largest Ethernet frame handled, bigger datagrams can't go over the air anyway
 
 // No hardware dependencies, so the gateway can be unit tested on a host (see firmware/tests)
@@ -115,6 +123,9 @@ bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPor
 // addresses) and SCTP; other protocols are dropped (true).
 bool ipGatewayDeliverIP(bool group, uint32_t dst, uint32_t src, uint8_t protocol, const uint8_t *l4, int length);
 
+// Raw DMR data received over the air (see IPGW_RAW_PORT), the user data of the packet. False if the USB IN endpoint is busy.
+bool ipGatewayDeliverRaw(bool group, uint32_t dst, uint32_t src, const uint8_t *data, int length);
+
 // A monitor record (see IPGW_MONITOR_PORT) to the host
 bool ipGatewayDeliverMonitor(const uint8_t *record, int length);
 
@@ -128,5 +139,7 @@ uint32_t ipGatewayRadioId(void);
 void ipGatewaySerialIn(const uint8_t *data, int length);
 // ICMP, UDP or SCTP from the host to a radio ID or talkgroup, from layer 4 on (UDP: header and payload, UDP length bytes)
 bool ipGatewayIPToAir(bool group, uint32_t dst, uint8_t protocol, const uint8_t *l4, int length);
+// The payload of a datagram from the host to IPGW_RAW_PORT, to go over the air as the user data of a packet
+bool ipGatewayRawToAir(bool group, uint32_t dst, const uint8_t *data, int length);
 
 #endif

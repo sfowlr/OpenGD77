@@ -223,6 +223,30 @@ static void testIPPackets(void)
 	CHECK(dmrDataBuildIP(false, 235, 1, DMR_IP_PROTO_UDP, datagram, 4, DT_RATE_12_DATA, 0, bursts, DMR_DATA_MAX_BURSTS) == 0);// too short
 }
 
+// Raw data (the network adapter's IPGW_RAW_PORT): the user data of a SAP 10 packet, up to 440 bytes with 2 preambles
+static void testRawPacket(void)
+{
+	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
+	uint8_t data[441];
+	dmrDataUDP_t udp;
+	dmrDataIP_t ip;
+
+	for (int i = 0; i < (int)sizeof(data); i++) data[i] = i * 7;
+
+	int n = dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_SHORT_DATA, false, 16776962, 3141592, data, 440, DT_RATE_12_DATA, 2, bursts, DMR_DATA_MAX_BURSTS);
+	CHECK(n == DMR_DATA_MAX_BURSTS);
+	CHECK(dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_SHORT_DATA, false, 16776962, 3141592, data, 441, DT_RATE_12_DATA, 2, bursts, DMR_DATA_MAX_BURSTS) == 0);
+
+	n = dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_SHORT_DATA, false, 16776962, 3141592, data, 2, DT_RATE_12_DATA, 2, bursts, DMR_DATA_MAX_BURSTS);
+	CHECK(n == 4);
+	CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
+	CHECK(dmrDataRxPacket.sap == DMR_SAP_SHORT_DATA && dmrDataRxPacket.dpf == DMR_DPF_UNCONFIRMED);
+	CHECK(dmrDataRxPacket.dst == 16776962 && dmrDataRxPacket.src == 3141592 && !dmrDataRxPacket.group);
+	CHECK(dmrDataRxPacket.length == 2 && memcmp(dmrDataRxPacket.data, data, 2) == 0);
+	CHECK(!dmrDataGetUDP(&dmrDataRxPacket, &udp) && !dmrDataGetIP(&dmrDataRxPacket, &ip));
+	dumpBursts("raw-short-data", bursts, n);
+}
+
 static void testTMSAck(void)
 {
 	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
@@ -425,6 +449,7 @@ int main(void)
 	testPadding(DT_RATE_1_DATA);
 	testTMSRates();
 	testIPPackets();
+	testRawPacket();
 	testTMSAck();
 	testRadioDeskVectors();
 	testCSBK();

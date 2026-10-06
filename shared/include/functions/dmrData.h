@@ -73,6 +73,7 @@ typedef struct
 #define DMR_DPF_PROPRIETARY			0x0F
 
 #define DMR_SAP_UDT					0x00
+#define DMR_SAP_UDPIP_COMPRESSION	0x03
 #define DMR_SAP_IP					0x04
 #define DMR_SAP_PROPRIETARY			0x09
 #define DMR_SAP_SHORT_DATA			0x0A
