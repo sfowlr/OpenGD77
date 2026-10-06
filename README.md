@@ -17,13 +17,16 @@ code, which the OpenGD77 developers release only as zip files on opengd77.com.
 
 | Branch | Contents |
 | --- | --- |
-| `main` | open-ham/OpenGD77 unchanged: the MK22 radios (GD-77, GD-77S, DM-1801, RD-5R) |
-| `dmr-packet-data` | `main` plus DMR packet data, a USB network adapter (CDC-NCM) and MMDVM hotspot fixes |
-| `dm1701-main` | the STM32 firmware (MD-UV380 / RT-3S, DM-1701 / RT-84 and others) unchanged, as released on opengd77.com (R20260131, `OpenGD77_MDUV380_DM1701_20260130.zip`) |
-| `dm1701-dmr-packet-data` | `dm1701-main` plus the same DMR data, network adapter and hotspot work |
+| `main` | open-ham/OpenGD77 unchanged: the 2022 MK22 code (GD-77, GD-77S, DM-1801, RD-5R) |
+| `gd77-main` | `main` plus the MK22 release R20260131 (`OPENGD77_20260131.zip`), unchanged |
+| `gd77-dmr-packet-data` | `gd77-main` plus DMR packet data, a USB network adapter (CDC-NCM) and MMDVM hotspot fixes |
+| `dmr-packet-data` | the same work on the 2022 code (superseded by `gd77-dmr-packet-data`) |
+| `dm1701-main` | the STM32 release R20260131 (MD-UV380 / RT-3S, DM-1701 / RT-84 and others), unchanged; its own history |
+| `dm1701-dmr-packet-data` | `dm1701-main` plus the same work |
 
-- The `dm1701-*` branches have their own history, not connected to `main`, so there are no pull requests between the
-  two lines. Compare `dmr-packet-data` with `main`, and `dm1701-dmr-packet-data` with `dm1701-main`.
+- Compare each work branch with its base: `gd77-dmr-packet-data` with `gd77-main`, `dmr-packet-data` with `main`,
+  `dm1701-dmr-packet-data` with `dm1701-main`. The `dm1701-*` branches aren't connected to the others, so there are no
+  pull requests between them.
 - The DMR data and network sources are the same file for file in both lines (`dmrData`, `dmrDataService`,
   `ipGateway`, `hotspot/dmrDataFrame`, `hotspot/hotspotData`, `usb_ncm.h`); a change to one is made in both.
 - What it adds, protocol by protocol: `docs/dmr_data.md`. The hotspot bug list and the status of each fix:
