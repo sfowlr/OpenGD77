@@ -56,6 +56,7 @@
 #include "hardware/radioHardwareInterface.h"
 #include "functions/dmrDataService.h"
 #include "hotspot/dmrDataFrame.h"
+#include "hotspot/hotspotData.h"
 #endif
 
 #define MMDVM_HEADER_LENGTH 4
@@ -92,7 +93,7 @@ static bool embeddedDataGetRawData(uint8_t *outputData);
 static void embeddedDataSetLC(const DMRLC_t *lc);
 static bool hasTXOverflow(void);
 static bool hasRXOverflow(void);
-static void hotspotDataTick(void);
+static void hotspotPacketDataTick(void);
 
 
 extern LinkItem_t *LinkHead;
@@ -223,6 +224,7 @@ static uint8_t colorCode = 1;
 static char overriddenLCTA[2 * 9] = {0}; // 2 LC frame only (enough to store callsign)
 static bool overriddenLCAvailable = false;
 static uint32_t hotspotTxDelay = 0;
+static bool netTerminatorReceived = false;// the host has sent the terminator of the call being transmitted
 static uint8_t overriddenBlocksTA = 0x00;
 static LC_STATE_t embeddedDataSequenceState;
 static bool	embeddedDataRaw[128];
@@ -1079,10 +1081,19 @@ static void getStatus(void)
 	buf[2]  = MMDVM_GET_STATUS;
 	buf[3]  = (0x02 | 0x20); // DMR and POCSAG enabled
 	buf[4]  = hotspotModemState;
-	buf[5]  = ( ((hotspotState == HOTSPOT_STATE_TX_START_BUFFERING) ||
-				(hotspotState == HOTSPOT_STATE_TRANSMITTING) ||
-				(hotspotState == HOTSPOT_STATE_TX_SHUTDOWN)) ||
-				hotspotCwKeying ) ? 0x01 : 0x00;
+	// Transmitting until the radio's last burst (the terminator) is on air, and while packet data is queued or sent
+	bool transmitting = (hotspotState == HOTSPOT_STATE_TX_START_BUFFERING) || (hotspotState == HOTSPOT_STATE_TRANSMITTING) ||
+			(hotspotState == HOTSPOT_STATE_TX_SHUTDOWN) || hotspotCwKeying || trxTransmissionEnabled || trxIsTransmitting ||
+			hotspotDataIsBusy();
+
+	buf[5]  = transmitting ? 0x01 : 0x00;
+
+	// Carrier detect, from the receiver's noise level as for the squelch, so that the host's listen before talk also
+	// sees analog signals and other colour codes
+	if (!transmitting && trxCarrierDetected(RADIO_DEVICE_PRIMARY))
+	{
+		buf[5] |= 0x40;
+	}
 
 	if (hasRXOverflow())
 	{
@@ -1097,7 +1108,11 @@ static void getStatus(void)
 	buf[6]  = 0; // No DSTAR space
 
 	buf[7]  = 10; // DMR Simplex
-	buf[8]  = (HOTSPOT_BUFFER_COUNT - wavbuffer_count); // DMR space
+	buf[8]  = (HOTSPOT_BUFFER_COUNT - wavbuffer_count); // DMR space, the smaller of the voice buffer and the data list
+	if (hotspotDataSpace() < buf[8])
+	{
+		buf[8] = hotspotDataSpace();
+	}
 
 	buf[9]  = 0; // No YSF space
 	buf[10] = 0; // No P25 space
@@ -2048,6 +2063,7 @@ static void storeNetFrame(volatile const uint8_t *comBuffer)
 	{
 		timeoutCounter = TX_BUFFERING_TIMEOUT;// set buffering timeout
 		hotspotState = HOTSPOT_STATE_TX_START_BUFFERING;
+		netTerminatorReceived = false;// a call without a header (late entry)
 	}
 
 	if (hotspotState == HOTSPOT_STATE_TRANSMITTING ||
@@ -2071,57 +2087,22 @@ static void storeNetFrame(volatile const uint8_t *comBuffer)
 	}
 }
 
-// Packet data and signalling from MMDVMHost (CSBK, data headers and blocks) is not voice.
-// It is collected into the data service's burst list and sent with the HR-C6000 data TX path, bits unchanged.
-static int netDataCount = 0;
-static int netDataExpected = 0;
-static bool netDataSending = false;
-static uint32_t netDataLastTime;
-static const uint32_t NET_DATA_GAP_MS = 180;// 3 slots without a frame ends the burst list
-
-static bool hotspotQueueNetData(uint8_t dataType, const uint8_t *frame)
+// Packet data and signalling from MMDVMHost (CSBK, MBC, data headers and blocks) is not voice: hotspotData.c collects
+// it into burst lists for the HR-C6000 data TX path, bits unchanged.
+bool hotspotDataTxStart(const dmrBurst_t *bursts, int count)
 {
-	if ((dataType == DT_RATE_34_DATA) || (dataType == DT_RATE_1_DATA))
-	{
-		return false;// TODO: needs Trellis decoding (Rate 3/4) / raw extraction (Rate 1)
-	}
+	return HRC6000DataTxStart(bursts, count);
+}
 
-	if (netDataSending || (netDataCount >= DMR_DATA_MAX_BURSTS))
+bool hotspotDataTxDone(void)
+{
+	dmrDataTxStatus_t status = HRC6000DataTxGetStatus();
+
+	if (status == DMR_DATA_TX_RUNNING)
 	{
 		return false;
 	}
-
-	dmrBurst_t *burst = &dmrDataServiceTxBursts()[netDataCount++];
-	dmrDataFrameToBurst(dataType, frame, burst);
-
-	// How many bursts belong to this transmission, so that it can start without waiting for the gap
-	if ((dataType == DT_CSBK) && ((burst->payload[0] & 0x3F) == DMR_CSBKO_PREAMBLE))
-	{
-		netDataExpected = netDataCount + burst->payload[3];
-	}
-	else if (dataType == DT_DATA_HEADER)
-	{
-		uint8_t dpf = burst->payload[0] & 0x0F;
-
-		if ((dpf == DMR_DPF_DEFINED_SHORT) || (dpf == DMR_DPF_RAW_SHORT))
-		{
-			netDataExpected = netDataCount + ((((burst->payload[0] >> 4) & 0x03) << 4) | (burst->payload[1] & 0x0F));
-		}
-		else if (dpf == DMR_DPF_UDT)
-		{
-			netDataExpected = netDataCount + (burst->payload[8] & 0x03) + 1;
-		}
-		else if (netDataExpected < netDataCount)
-		{
-			netDataExpected = netDataCount + (burst->payload[8] & 0x7F);
-		}
-	}
-	else if (netDataExpected < netDataCount)
-	{
-		netDataExpected = netDataCount;// lone CSBK
-	}
-
-	netDataLastTime = ticksGetMillis();
+	HRC6000DataTxClearStatus();
 	return true;
 }
 
@@ -2138,7 +2119,7 @@ static void hotspotSendDataFrame(const dmrBurst_t *burst)
 	enqueueUSBData(frameData, frameData[1U]);
 }
 
-static void hotspotDataTick(void)
+static void hotspotPacketDataTick(void)
 {
 	dmrBurst_t burst;
 
@@ -2147,32 +2128,8 @@ static void hotspotDataTick(void)
 		hotspotSendDataFrame(&burst);
 	}
 
-	if (netDataSending)
-	{
-		dmrDataTxStatus_t status = HRC6000DataTxGetStatus();
-
-		if ((status == DMR_DATA_TX_DONE) || (status == DMR_DATA_TX_FAILED))
-		{
-			HRC6000DataTxClearStatus();
-			netDataSending = false;
-			netDataCount = 0;
-			netDataExpected = 0;
-		}
-	}
-	else if ((netDataCount > 0) && ((netDataCount >= netDataExpected) || ((ticksGetMillis() - netDataLastTime) > NET_DATA_GAP_MS)))
-	{
-		// Only from the idle receive state, never in the middle of a voice transmission
-		if ((hotspotState == HOTSPOT_STATE_RX_PROCESS) && (rfFrameBufCount == 0) && !trxTransmissionEnabled)
-		{
-			netDataSending = HRC6000DataTxStart(dmrDataServiceTxBursts(), netDataCount);
-		}
-
-		if (!netDataSending && ((ticksGetMillis() - netDataLastTime) > 2000))
-		{
-			netDataCount = 0;// could not get the channel, give up
-			netDataExpected = 0;
-		}
-	}
+	// Only from the idle receive state, never in the middle of a voice transmission
+	hotspotDataTick(ticksGetMillis(), (hotspotState == HOTSPOT_STATE_RX_PROCESS) && (rfFrameBufCount == 0) && !trxTransmissionEnabled && !trxIsTransmitting);
 }
 
 static uint8_t hotspotModeReceiveNetFrame(const uint8_t *comBuffer, uint8_t timeSlot)
@@ -2193,14 +2150,20 @@ static uint8_t hotspotModeReceiveNetFrame(const uint8_t *comBuffer, uint8_t time
 	{
 		uint8_t dataType = comBuffer[3] & 0x0F;
 
-		if ((dataType != DT_VOICE_LC_HEADER) && (dataType != DT_TERMINATOR_WITH_LC))
+		if (dataType == DT_TERMINATOR_WITH_LC)
 		{
-			if ((dataType >= DT_CSBK) && (dataType != DT_IDLE) && (dataType <= DT_RATE_1_DATA))
-			{
-				hotspotQueueNetData(dataType, comBuffer + MMDVM_HEADER_LENGTH);
-			}
-			return 0U;// PI header, Idle, or data: ACK it, but it is not audio
+			// The end of the call: what is buffered goes out, then the radio's own terminator, without waiting for
+			// the network timeout
+			netTerminatorReceived = true;
+			return 0U;
 		}
+
+		if (dataType != DT_VOICE_LC_HEADER)
+		{
+			return hotspotDataQueue(dataType, comBuffer + MMDVM_HEADER_LENGTH, ticksGetMillis());// 0 or a NAK reason
+		}
+
+		netTerminatorReceived = false;// a new call
 	}
 
 	lc.srcId = 0;// zero these values as they are checked later in the function, but only updated if the data type is DT_VOICE_LC_HEADER
@@ -2443,6 +2406,7 @@ void hotspotStateMachine(void)
 			}
 
 			rxLCFrameSent = false;
+			netTerminatorReceived = false;
 			wavbuffer_read_idx = 0;
 			wavbuffer_write_idx = 0;
 			wavbuffer_count = 0;
@@ -2612,7 +2576,7 @@ void hotspotStateMachine(void)
 			}
 			else
 			{
-				if (wavbuffer_count > TX_BUFFER_MIN_BEFORE_TRANSMISSION)
+				if ((wavbuffer_count > TX_BUFFER_MIN_BEFORE_TRANSMISSION) || (netTerminatorReceived && (wavbuffer_count > 0)))
 				{
 					if (hotspotCwKeying == false)
 					{
@@ -2637,11 +2601,13 @@ void hotspotStateMachine(void)
 			break;
 
 		case HOTSPOT_STATE_TRANSMITTING:
-			// Stop transmitting when there is no data in the buffer or if MMDVMHost sends the idle command
-			if (((wavbuffer_count == 0) && (--netRXDataTimer <= 0)) || (hotspotModemState == STATE_IDLE))
+			// Stop transmitting when there is no data in the buffer or if MMDVMHost sends the idle command. After the
+			// host's terminator straight away, else after the network timeout and a wait for more of the call
+			if (((wavbuffer_count == 0) && (netTerminatorReceived || (--netRXDataTimer <= 0))) || (hotspotModemState == STATE_IDLE))
 			{
 				hotspotState = HOTSPOT_STATE_TX_SHUTDOWN;
-				txStopDelay = ((hotspotModemState == STATE_IDLE) ? TX_BUFFERING_TIMEOUT : (TX_BUFFERING_TIMEOUT * 2));
+				txStopDelay = (netTerminatorReceived ? 0 : ((hotspotModemState == STATE_IDLE) ? TX_BUFFERING_TIMEOUT : (TX_BUFFERING_TIMEOUT * 2)));
+				netTerminatorReceived = false;
 			}
 			break;
 
@@ -2674,7 +2640,7 @@ void hotspotStateMachine(void)
 			break;
 	}
 
-	hotspotDataTick();
+	hotspotPacketDataTick();
 }
 
 static uint8_t setFreq(const uint8_t *data, uint8_t length)
@@ -2766,6 +2732,8 @@ void hotspotInit(void)
 	hotspotCwKeying = false;
 	cwReset();
 	hotspotTxDelay = 0;
+	netTerminatorReceived = false;
+	hotspotDataReset(dmrDataServiceTxBursts());// the data service is not used in hotspot mode
 	memset(&hotspotRxedDMR_LC, 0, sizeof(DMRLC_t));// clear automatic variable
 
 	rxLCFrameSent = false;

@@ -78,7 +78,7 @@
 #define TS_STABLE_THRESHOLD                 4
 #define TS_IS_LOCKED                        6
 
-#define HS_NUM_OF_SILENCE_SEQ_ON_STARTUP    1 // Hotspot: number of silence sequences (x6 frames) sent to the chip when a transmission is starting (cleaner audio result)
+#define HS_NUM_OF_SILENCE_SEQ_ON_STARTUP    0 // Hotspot: number of silence sequences (x6 frames) sent to the chip when a transmission is starting (cleaner audio result). None: 1 delayed the voice of every call by 360 ms
 
 #define SUPERFRAME_NUM_FRAMES               6
 
