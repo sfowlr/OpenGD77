@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-
-if [ -d firmware/linkerdata ]; then
-    if [ -e firmware/tools/codec_cleaner.Linux -a -x firmware/tools/codec_cleaner.Linux ]; then
-	cd firmware/linkerdata && ../tools/codec_cleaner.Linux -C
-    else
-	echo "Error: The required tools are not installed in firmware/tools, the process cannot be completed."
-	exit 1
-    fi
-else
-	echo "Error: Your source tree is incomplete, please fix this."
-	exit 1
-fi
-
-exit 0
+# Makes the codec placeholders of both trees: the releases' own scripts, prepare_GD77 (firmware/, MK22) and
+# prepare_MDUV380 (MDUV380_firmware/, STM32), kept unchanged
+status=0
+[ -d firmware ] && { bash ./prepare_GD77 || status=1; }
+[ -d MDUV380_firmware ] && { bash ./prepare_MDUV380 || status=1; }
+exit $status

@@ -1,16 +1,7 @@
 @echo OFF
-
-if exist firmware\linkerdata (
-	if exist firmware\tools\codec_cleaner.exe (
-		cd firmware\linkerdata && ..\tools\codec_cleaner.exe -C
-		cd ..\..
-	) else (
-		@echo Error: The required tools are not installed in firmware/tools, the process cannot be completed.
-		exit /b 1
-	)
-) else (
-	@echo Error: Your source tree is incomplete, please fix this.
-	exit /b 1
-)
-
-exit /b 0
+rem Makes the codec placeholders of both trees: the releases' own scripts, prepare_GD77.bat (firmware\, MK22)
+rem and prepare_MDUV380.bat (MDUV380_firmware\, STM32), kept unchanged
+set status=0
+if exist firmware call prepare_GD77.bat || set status=1
+if exist MDUV380_firmware call prepare_MDUV380.bat || set status=1
+exit /b %status%
