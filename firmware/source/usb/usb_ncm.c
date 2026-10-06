@@ -134,7 +134,7 @@ static void sendNotification(uint8_t code)
 // ISR: the speed is announced first, then the connection
 static usb_status_t interruptInCallback(usb_device_handle handle, usb_device_endpoint_callback_message_struct_t *message, void *param)
 {
-	if (ncm.notifyPending && usbNcmIsUp())
+	if (ncm.notifyPending && (ncm.configuration != 0))
 	{
 		ncm.notifyPending = 0;
 		sendNotification(NCM_NOTIFY_NETWORK_CONNECTION);
@@ -322,6 +322,11 @@ usb_status_t USB_DeviceNcmEvent(void *handle, uint32_t event, void *param)
 				{
 					initEndpoint(USB_NCM_INTERRUPT_IN_ENDPOINT | (USB_IN << 7U), USB_ENDPOINT_INTERRUPT,
 									FS_NCM_INTERRUPT_IN_PACKET_SIZE, FS_NCM_INTERRUPT_IN_INTERVAL, interruptInCallback);
+
+					// macOS only selects the data alternate setting once the link is reported up, Linux and Windows
+					// select it first. So the speed and the connection are announced now, and again for alternate 1.
+					ncm.notifyPending = 1;
+					sendNotification(NCM_NOTIFY_SPEED_CHANGE);
 				}
 			}
 			return kStatus_USB_Success;
