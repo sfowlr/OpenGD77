@@ -55,21 +55,25 @@ at compile time in `ipGateway.h` (each a base and a /8 to /24 prefix; the low bi
 | --- | --- | --- |
 | Individual | 11.0.0.0/8 | DMR IDs. DHCP gives the host its own radio's ID: radio 10005 gives 11.0.39.21 (10.250.39.21 with 10.250.0.0/16) |
 | Multicast | 225.0.0.0/8 | Talkgroups both ways: send to 225.x.y.z, and group data received over the air arrives there (join the group on the radio's interface) |
-| Link | /31 | The host and the radio only: the host is 11.<ID>, the radio the other address of the pair (11.<ID> xor 1, 11.0.39.20 for radio 10005) |
+| Link | /32 | The host alone; the radio is 11.<ID> xor 1 (11.0.39.20 for radio 10005), on the link by an option 121 route with router 0.0.0.0 |
 | Group (optional) | none | A unicast range for sending to talkgroups, e.g. 10.251.0.0/16 next to 10.250.0.0/16, for hosts that ignore the multicast route |
 
 - IDs bigger than a range are truncated to its low bits. In a /16, radio 0x010203 gets 10.250.2.3, and its host also
   gets the data sent over the air to radio 0x0203; sending to 10.250.2.3 reaches radio 0x0203. Overlaps are possible
   but unlikely, since high IDs are sparse. The radio itself still only acknowledges data to its full ID.
-- Option 121/249 routes the individual range, the multicast range and the optional group range through the radio,
-  with no default route, so the host's other traffic is unaffected. The radio answers ARP for its own address only.
+- Option 121/249 puts the radio's address on the link, then routes the individual range, the multicast range and the
+  optional group range through the radio, with no default route, so the host's other traffic is unaffected. The radio
+  answers ARP for every address but the host's, in case a host ignores the on link route.
+- `-DIPGW_LINK_PREFIX=31` makes the host and the radio a /31 instead (the radio answers ARP for its own address
+  only). macOS treats both ends of a /31 as broadcast addresses and refuses a plain send to the radio (it needs
+  SO_BROADCAST), so the /32 is the default.
 - Each radio has an address of its own, so several radios can be plugged into one host and each one's UDP port 3334
   is reachable. They all route the same ranges though, so the host sends all its DMR traffic through one of them
   (bind to a radio's interface to choose).
 - The radio's address is also the address of radio ID xor 1. The radio itself only answers ping, DHCP and UDP port
   3334 there; anything else sent to it goes over the air to radio ID xor 1, and data from that radio arrives from it.
 - `-DIPGW_LINK_PREFIX=8` (any prefix up to the individual one) gives the older shared link instead, for hosts that
-  can't use a /31 (Windows may not): every radio is on the link, the radio is 11.255.255.254 (that ID can't be used),
+  can't use either: every radio is on the link, the radio is 11.255.255.254 (that ID can't be used),
   the radio answers ARP for every address but the host's, and only the multicast range (and an off link group range)
   is routed. One radio per host.
 - The top individual address (11.255.255.255) is the all call, as is 255.255.255.255 (and the subnet broadcast on a
