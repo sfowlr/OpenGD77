@@ -16,6 +16,7 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include "functions/dmrDataService.h"
 #include "functions/codeplug.h"
 #include "main.h"
 #include "functions/settings.h"
@@ -1067,6 +1068,7 @@ void mainTask(void *data)
 			}
 			soundTickMelody();
 			voxTick();
+			dmrDataServiceTick();
 
 #if defined(PLATFORM_RD5R) // Needed for platforms which can't control the poweroff
 			settingsSaveIfNeeded(false);

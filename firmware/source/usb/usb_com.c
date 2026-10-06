@@ -15,6 +15,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
+#include "functions/dmrDataService.h"
 #include <stdarg.h>
 #include "hotspot/uiHotspot.h"
 #include "functions/settings.h"
@@ -426,6 +427,13 @@ static void handleCPSRequest(void)
 			break;
 		case 'C':
 			cpsHandleCommand();
+			break;
+		case 'D':
+			{
+				// DMR packet data / signalling, see dmrDataService.c
+				int length = dmrDataServiceHandleUSB((uint8_t *)com_requestbuffer, usbComSendBuf);
+				USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, length);
+			}
 			break;
 		default:
 			usbComSendBuf[0] = '-';

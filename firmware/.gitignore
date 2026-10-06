@@ -1,2 +1,4 @@
 /Debug_GD-*
 /JA_Debug_*
+/linkerdata/codec_bin_section_*.bin
+/build*/

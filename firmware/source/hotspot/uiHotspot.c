@@ -35,6 +35,8 @@
 #include "functions/trx.h"
 #include "usb/usb_com.h"
 #include "functions/rxPowerSaving.h"
+#include "functions/dmrDataService.h"
+#include "hotspot/dmrDataFrame.h"
 
 // Uncomment the following to enable demo screen, access it with function events
 //#define DEMO_SCREEN
@@ -332,6 +334,7 @@ static void processUSBDataQueue(void);
 static void handleHotspotRequest(void);
 static void cwReset(void);
 static void cwProcess(void);
+static void hotspotDataTick(void);
 
 #if defined(MMDVM_SEND_DEBUG)
 static void sendDebug1(const char *text);
@@ -469,6 +472,7 @@ menuStatus_t menuHotspotMode(uiEvent_t *ev, bool isFirstRun)
 			com_request = 0;
 		}
 		hotspotStateMachine();
+		hotspotDataTick();
 
 		// CW beaconing
 		if (cwKeying)
@@ -1198,6 +1202,111 @@ static void storeNetFrame(volatile const uint8_t *com_requestbuffer)
 
 }
 
+// Packet data and signalling from MMDVMHost (CSBK, data headers and blocks) is not voice.
+// It is collected into a burst list and sent with the HR-C6000 data TX path, bits unchanged.
+static dmrBurst_t netDataBursts[DMR_DATA_MAX_BURSTS];
+static int netDataCount = 0;
+static int netDataExpected = 0;
+static bool netDataSending = false;
+static uint32_t netDataLastTime;
+static const uint32_t NET_DATA_GAP_MS = 180;// 3 slots without a frame ends the burst list
+
+static bool hotspotQueueNetData(uint8_t dataType, volatile const uint8_t *frame)
+{
+	if ((dataType == DT_RATE_34_DATA) || (dataType == DT_RATE_1_DATA))
+	{
+		return false;// TODO: needs Trellis decoding (Rate 3/4) / raw extraction (Rate 1)
+	}
+
+	if (netDataSending || (netDataCount >= DMR_DATA_MAX_BURSTS))
+	{
+		return false;
+	}
+
+	dmrBurst_t *burst = &netDataBursts[netDataCount++];
+	dmrDataFrameToBurst(dataType, (const uint8_t *)frame, burst);
+
+	// How many bursts belong to this transmission, so that it can start without waiting for the gap
+	if ((dataType == DT_CSBK) && ((burst->payload[0] & 0x3F) == DMR_CSBKO_PREAMBLE))
+	{
+		netDataExpected = netDataCount + burst->payload[3];
+	}
+	else if (dataType == DT_DATA_HEADER)
+	{
+		uint8_t dpf = burst->payload[0] & 0x0F;
+
+		if ((dpf == DMR_DPF_DEFINED_SHORT) || (dpf == DMR_DPF_RAW_SHORT))
+		{
+			netDataExpected = netDataCount + ((((burst->payload[0] >> 4) & 0x03) << 4) | (burst->payload[1] & 0x0F));
+		}
+		else if (dpf == DMR_DPF_UDT)
+		{
+			netDataExpected = netDataCount + (burst->payload[8] & 0x03) + 1;
+		}
+		else if (netDataExpected < netDataCount)
+		{
+			netDataExpected = netDataCount + (burst->payload[8] & 0x7F);
+		}
+	}
+	else if (netDataExpected < netDataCount)
+	{
+		netDataExpected = netDataCount;// lone CSBK
+	}
+
+	netDataLastTime = fw_millis();
+	return true;
+}
+
+// Data received on RF, to MMDVMHost as a DMR data frame
+static void hotspotSendDataFrame(const dmrBurst_t *burst)
+{
+	uint8_t frameData[DMR_FRAME_LENGTH_BYTES + MMDVM_HEADER_LENGTH + 2U] = {MMDVM_FRAME_START, (DMR_FRAME_LENGTH_BYTES + MMDVM_HEADER_LENGTH + 2U), MMDVM_DMR_DATA2, DMR_SYNC_DATA | burst->dataType};
+	if (!dmrDataBurstToFrame(burst, trxGetDMRColourCode(), frameData + MMDVM_HEADER_LENGTH))
+	{
+		return;
+	}
+
+	setRSSIToFrame(frameData);
+	enqueueUSBData(frameData, frameData[1U]);
+}
+
+static void hotspotDataTick(void)
+{
+	dmrBurst_t burst;
+
+	while (dmrDataServiceRxBurstPop(&burst))
+	{
+		hotspotSendDataFrame(&burst);
+	}
+
+	if (netDataSending)
+	{
+		dmrDataTxStatus_t status = HRC6000DataTxGetStatus();
+
+		if ((status == DMR_DATA_TX_DONE) || (status == DMR_DATA_TX_FAILED))
+		{
+			HRC6000DataTxClearStatus();
+			netDataSending = false;
+			netDataCount = 0;
+			netDataExpected = 0;
+		}
+	}
+	else if ((netDataCount > 0) && ((netDataCount >= netDataExpected) || ((fw_millis() - netDataLastTime) > NET_DATA_GAP_MS)))
+	{
+		// Only from the idle receive state, never in the middle of a voice transmission
+		if ((hotspotState == HOTSPOT_STATE_RX_PROCESS) && (rfFrameBufCount == 0) && !trxTransmissionEnabled)
+		{
+			netDataSending = HRC6000DataTxStart(netDataBursts, netDataCount);
+		}
+
+		if (!netDataSending && ((fw_millis() - netDataLastTime) > 2000))
+		{
+			netDataCount = 0;// could not get the channel, give up
+			netDataExpected = 0;
+		}
+	}
+}
+
 static uint8_t hotspotModeReceiveNetFrame(volatile const uint8_t *com_requestbuffer, uint8_t timeSlot)
 {
 	DMRLC_T lc;
@@ -1207,6 +1316,21 @@ static uint8_t hotspotModeReceiveNetFrame(volatile const uint8_t *com_requestbuf
 		hotspotState = HOTSPOT_STATE_INITIALISE;
 		mmdvmHostIsConnected = true;
 		updateScreen(HOTSPOT_RX_IDLE);
+	}
+
+	// Data sync frames other than the voice LC header and terminator never go to the voice path
+	if (com_requestbuffer[3] & DMR_SYNC_DATA)
+	{
+		uint8_t dataType = com_requestbuffer[3] & DT_MASK;
+
+		if ((dataType != DT_VOICE_LC_HEADER) && (dataType != DT_TERMINATOR_WITH_LC))
+		{
+			if ((dataType >= DT_CSBK) && (dataType != DT_IDLE) && (dataType <= DT_RATE_1_DATA))
+			{
+				hotspotQueueNetData(dataType, com_requestbuffer + MMDVM_HEADER_LENGTH);
+			}
+			return 0U;// PI header, Idle, or data: ACK it, but it is not audio
+		}
 	}
 
 	lc.srcId = 0;// zero these values as they are checked later in the function, but only updated if the data type is DT_VOICE_LC_HEADER

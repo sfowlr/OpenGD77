@@ -30,6 +30,7 @@
 #include "functions/voicePrompts.h"
 #include "interfaces/gpio.h"
 #include "interfaces/interrupts.h"
+#include "functions/ticks.h"
 
 
 static const int QSO_TIMER_TIMEOUT              = 2400;
@@ -261,6 +262,7 @@ static inline void HRC6000RxInterruptHandler(void);
 static inline void HRC6000TxInterruptHandler(void);
 static void HRC6000TransitionToTx(void);
 static void triggerQSOdataDisplay(void);
+static void dataTick(void);
 
 enum RXSyncClass { SYNC_CLASS_HEADER = 0, SYNC_CLASS_VOICE = 1, SYNC_CLASS_DATA = 2, SYNC_CLASS_RC = 3};
 enum RXSyncType { MS_SYNC =0 , BS_SYNC =1 , TDMA1_SYNC = 2 , TDMA2_SYNC =3};
@@ -273,6 +275,22 @@ static bool ccHold = true;
 static int ccHoldTimer = 0;
 static const int CCHOLDVALUE = 1000;			//1 second
 static int wakeTriesCount;
+
+// Packet data / signalling TX. The bursts are owned by the caller (see HRC6000DataTxStart)
+static const dmrBurst_t *dataTxBursts;
+static volatile int dataTxCount;
+static volatile int dataTxIndex;
+static volatile bool dataTxActive = false;
+static volatile dmrDataTxStatus_t dataTxStatus = DMR_DATA_TX_IDLE;
+static uint8_t dataTxMcuCrc;// state of the CRC_MCU_Control bit (reg 0x40 bit 3), 0xFF when unknown
+static uint32_t dataTxDeadline;
+static const uint32_t DATA_TX_TIMEOUT_MS = 10000;// on top of 60ms per burst, covers the repeater wakeup
+
+// Packet data RX, filled by the ISR and drained by the HR-C6000 task
+#define DATA_RX_QUEUE_SIZE 8
+static dmrBurst_t dataRxQueue[DATA_RX_QUEUE_SIZE];
+static volatile uint8_t dataRxWriteIdx = 0;
+static volatile uint8_t dataRxReadIdx = 0;
 
 static void writeSPIRegister0x04Multi(const uint8_t values[][2], uint8_t length)
 {
@@ -618,6 +636,45 @@ inline static void HRC6000SysPostAccessInt(void)
 }
 
 
+// CSBK, MBC, data header and data blocks. Voice headers, terminators and Idle are not packet data
+static inline bool isPacketDataType(int dataType)
+{
+	return ((dataType >= DT_CSBK) && (dataType <= DT_RATE_34_DATA)) || (dataType == DT_RATE_1_DATA);
+}
+
+static void dataRxQueueBurst(int dataType)
+{
+	uint8_t next = (dataRxWriteIdx + 1) % DATA_RX_QUEUE_SIZE;
+
+	if (next == dataRxReadIdx)
+	{
+		return;// overflow, the packet CRC will catch the missing block
+	}
+
+	dmrBurst_t *burst = &dataRxQueue[dataRxWriteIdx];
+	burst->dataType = dataType;
+	burst->length = (dataType == DT_RATE_1_DATA) ? 24 : ((dataType == DT_RATE_34_DATA) ? 18 : 12);
+	burst->flags = rxCRCisValid ? 0 : DMR_BURST_FLAG_RX_CRC_ERROR;
+	SPI0ReadPageRegBytAarray(0x02, 0x00, burst->payload, burst->length);
+	dataRxWriteIdx = next;
+}
+
+static void dataTxSendNextBurst(void)
+{
+	const dmrBurst_t *burst = &dataTxBursts[dataTxIndex++];
+	uint8_t mcuCrc = (burst->flags & DMR_BURST_FLAG_MCU_CRC) ? 0x08 : 0x00;
+
+	if (mcuCrc != dataTxMcuCrc)
+	{
+		SPI0SeClearPageRegByteWithMask(0x04, 0x40, 0xF7, mcuCrc);// CRC_MCU_Control: send the payload verbatim, or let the HR-C6000 add the CRC
+		dataTxMcuCrc = mcuCrc;
+	}
+
+	SPI0WritePageRegByteArray(0x02, 0x00, burst->payload, burst->length);
+	SPI0WritePageRegByte(0x04, 0x41, 0x80);// Transmit during next Timeslot
+	SPI0WritePageRegByte(0x04, 0x50, burst->dataType << 4);// Data Type, Data, LCSS = 0
+}
+
 inline static void HRC6000SysReceivedDataInt(void)
 {
 	/*
@@ -662,7 +719,11 @@ inline static void HRC6000SysReceivedDataInt(void)
 	}
 
 
-	if (((slot_state == DMR_STATE_RX_1) || (slot_state == DMR_STATE_RX_2)) && ((rpi != 0) || (rxCRCisValid != true) || !checkColourCodeFilter()))
+	// Data blocks have no CRC of their own (the packet CRC-32 covers them), so don't drop them on the HR-C6000 CRC flag
+	bool isPacketData = (rxSyncClass == SYNC_CLASS_DATA) && isPacketDataType(rxDataType);
+	bool isDataBlock = isPacketData && (rxDataType >= DT_RATE_12_DATA) && (rxDataType != DT_IDLE);
+
+	if (((slot_state == DMR_STATE_RX_1) || (slot_state == DMR_STATE_RX_2)) && ((rpi != 0) || ((rxCRCisValid != true) && !isDataBlock) || !checkColourCodeFilter()))
 	{
 		// Something is not correct
 		return;
@@ -730,7 +791,8 @@ inline static void HRC6000SysReceivedDataInt(void)
 				skip_count = 0;
 				lastHeardClearLastID();// Tell the LastHeard system that this is a new start
 
-				if (settingsUsbMode == USB_MODE_HOTSPOT)
+				// Don't make the hotspot announce a voice call for a data transmission
+				if ((settingsUsbMode == USB_MODE_HOTSPOT) && !isPacketData)
 				{
 					DMR_frame_buffer[27 + 0x0c] = HOTSPOT_RX_START;
 					hotspotDMRRxFrameBufferAvailable = true;
@@ -778,6 +840,14 @@ inline static void HRC6000SysReceivedDataInt(void)
 				}
 			}
 		}
+	}
+
+	// Packet data on our slot (RMO: our timeslot, DMO: the slot we are locked to)
+	if (isPacketData && (rpi == 0) && (slot_state < DMR_STATE_TX_START_1) && checkColourCodeFilter() &&
+			(((trxDMRModeRx == DMR_MODE_RMO) && (timeCode == trxGetDMRTimeSlot()) && (lastTimeCode != timeCode)) ||
+			 ((trxDMRModeRx == DMR_MODE_DMO) && (slot_state == DMR_STATE_RX_1))))
+	{
+		dataRxQueueBurst(rxDataType);
 	}
 
 	if (timeCode != -1)
@@ -1035,6 +1105,13 @@ inline static void HRC6000TimeslotInterruptHandler(void)
 
 		case DMR_STATE_TX_START_1: // Start TX (second step)
 			LEDs_PinWrite(GPIO_LEDred, Pin_LEDred, 1);// for repeater wakeup
+			if (dataTxActive)
+			{
+				trxIsTransmitting = true;
+				dataTxSendNextBurst();
+				slot_state = DMR_STATE_DATA_TX_1;
+				break;
+			}
 			setupPcOrTGHeader();
 			SPI0WritePageRegByte(0x04, 0x41, 0x80);    //Transmit during next Timeslot
 			SPI0WritePageRegByte(0x04, 0x50, 0x10);    //Set Data Type to 0001 (Voice LC Header), Data, LCSS=00
@@ -1204,6 +1281,26 @@ inline static void HRC6000TimeslotInterruptHandler(void)
 				slot_state = DMR_STATE_IDLE;
 			}
 			trxIsTransmitting = false;
+			break;
+
+		case DMR_STATE_DATA_TX_1: // Ongoing data TX (inactive timeslot)
+			SPI0WritePageRegByte(0x04, 0x41, 0x00);
+			if (dataTxIndex >= dataTxCount)
+			{
+				// No terminator for data. TX_END_2 restores reg 0x40, which also clears CRC_MCU_Control
+				trxTransmissionEnabled = false;
+				dataTxActive = false;
+				slot_state = DMR_STATE_TX_END_2;
+			}
+			else
+			{
+				slot_state = DMR_STATE_DATA_TX_2;
+			}
+			break;
+
+		case DMR_STATE_DATA_TX_2: // Ongoing data TX (active timeslot)
+			dataTxSendNextBurst();
+			slot_state = DMR_STATE_DATA_TX_1;
 			break;
 
 		case DMR_STATE_REPEATER_WAKE_1:
@@ -1429,6 +1526,76 @@ bool callAcceptFilter(void)
 
 
 
+bool HRC6000DataTxStart(const dmrBurst_t *bursts, int count)
+{
+	if ((count <= 0) || (dataTxStatus == DMR_DATA_TX_RUNNING) || trxTransmissionEnabled || trxIsTransmitting ||
+			(trxGetMode() != RADIO_MODE_DIGITAL) || (slot_state >= DMR_STATE_TX_START_1))
+	{
+		return false;
+	}
+
+	dataTxBursts = bursts;
+	dataTxCount = count;
+	dataTxIndex = 0;
+	dataTxMcuCrc = 0xFF;
+	dataTxDeadline = fw_millis() + DATA_TX_TIMEOUT_MS + (count * 60);
+	dataTxStatus = DMR_DATA_TX_RUNNING;
+	dataTxActive = true;
+
+	clearIsWakingState();
+	trxEnableTransmission();// The state machine starts from tick_HR_C6000 (DMO) or after the repeater wakeup (RMO)
+
+	return true;
+}
+
+dmrDataTxStatus_t HRC6000DataTxGetStatus(void)
+{
+	return dataTxStatus;
+}
+
+void HRC6000DataTxClearStatus(void)
+{
+	if (dataTxStatus != DMR_DATA_TX_RUNNING)
+	{
+		dataTxStatus = DMR_DATA_TX_IDLE;
+	}
+}
+
+static void dataTxAbort(void)
+{
+	taskENTER_CRITICAL();
+	dataTxActive = false;
+	trxTransmissionEnabled = false;
+	taskEXIT_CRITICAL();
+	dataTxStatus = DMR_DATA_TX_FAILED;
+	LEDs_PinWrite(GPIO_LEDred, Pin_LEDred, 0);
+}
+
+static void dataTick(void)
+{
+	if (dataTxStatus == DMR_DATA_TX_RUNNING)
+	{
+		if (dataTxActive)
+		{
+			if ((getIsWakingState() == WAKING_MODE_FAILED) || (fw_millis() > dataTxDeadline))
+			{
+				dataTxAbort();
+			}
+		}
+		else if (!trxIsTransmitting)
+		{
+			dataTxStatus = DMR_DATA_TX_DONE;
+			LEDs_PinWrite(GPIO_LEDred, Pin_LEDred, 0);
+		}
+	}
+
+	while (dataRxReadIdx != dataRxWriteIdx)
+	{
+		dmrDataServiceRxBurst(&dataRxQueue[dataRxReadIdx]);
+		dataRxReadIdx = (dataRxReadIdx + 1) % DATA_RX_QUEUE_SIZE;
+	}
+}
+
 void tick_HR_C6000(void)
 {
 
@@ -1557,7 +1724,11 @@ void tick_HR_C6000(void)
 		else
 		{
 			// normal operation. Not waking the repeater
-			if (settingsUsbMode == USB_MODE_HOTSPOT)
+			if (dataTxActive)
+			{
+				// The bursts are sent from the TS ISR, there is no audio to buffer or encode
+			}
+			else if (settingsUsbMode == USB_MODE_HOTSPOT)
 			{
 				if ((hotspotDMRTxFrameBufferEmpty == true) && (wavbuffer_count > 0))
 				{
@@ -1663,6 +1834,8 @@ void tick_HR_C6000(void)
 			dmrMonitorCapturedTS = -1;// Reset the TS capture
 		}
 	}
+
+	dataTick();
 
 	rxCRCisValid = false;// Reset this
 }

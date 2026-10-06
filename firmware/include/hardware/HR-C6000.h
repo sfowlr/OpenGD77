@@ -28,6 +28,7 @@
 #include "usb/usb_com.h"
 
 #include "dmr_codec/codec.h"
+#include "functions/dmrData.h"
 
 
 #define DMR_FRAME_BUFFER_SIZE 64
@@ -45,7 +46,10 @@ enum DMR_SLOT_STATE { DMR_STATE_IDLE, DMR_STATE_RX_1, DMR_STATE_RX_2, DMR_STATE_
 					  DMR_STATE_TX_START_1, DMR_STATE_TX_START_2, DMR_STATE_TX_START_3, DMR_STATE_TX_START_4, DMR_STATE_TX_START_5,
 					  DMR_STATE_TX_1, DMR_STATE_TX_2, DMR_STATE_TX_END_1, DMR_STATE_TX_END_2, DMR_STATE_TX_END_3_RMO, DMR_STATE_TX_END_3_DMO,
 					  DMR_STATE_REPEATER_WAKE_1, DMR_STATE_REPEATER_WAKE_2, DMR_STATE_REPEATER_WAKE_3,
-					  DMR_STATE_REPEATER_WAKE_FAIL_1, DMR_STATE_REPEATER_WAKE_FAIL_2 };
+					  DMR_STATE_REPEATER_WAKE_FAIL_1, DMR_STATE_REPEATER_WAKE_FAIL_2,
+					  DMR_STATE_DATA_TX_1, DMR_STATE_DATA_TX_2 };// Data TX states must stay after DMR_STATE_TX_START_1
+
+typedef enum { DMR_DATA_TX_IDLE, DMR_DATA_TX_RUNNING, DMR_DATA_TX_DONE, DMR_DATA_TX_FAILED } dmrDataTxStatus_t;
 
 enum WakingMode { WAKING_MODE_NONE, WAKING_MODE_WAITING, WAKING_MODE_FAILED };
 
@@ -71,5 +75,13 @@ int HRC6000GetReceivedTgOrPcId(void);
 int HRC6000GetReceivedSrcId(void);
 void HRC6000ClearTimecodeSynchronisation(void);
 void HRC6000SetCCFilterMode(bool enable);
+
+// Packet data / signalling. The bursts are sent one per slot on the current timeslot, using the normal
+// DMO / repeater wakeup TX path. The bursts array must stay valid until the status is no longer RUNNING.
+bool HRC6000DataTxStart(const dmrBurst_t *bursts, int count);
+dmrDataTxStatus_t HRC6000DataTxGetStatus(void);
+void HRC6000DataTxClearStatus(void);
+// Implemented by the data service, called from the HR-C6000 task for every packet data burst received
+void dmrDataServiceRxBurst(const dmrBurst_t *burst);
 
 #endif /* _OPENGD77_HR_C6000_H_ */

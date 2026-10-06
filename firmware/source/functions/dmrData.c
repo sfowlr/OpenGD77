@@ -1,0 +1,561 @@
+/*
+ * DMR packet data (ETSI TS 102 361-1 clause 8 / 9) for OpenGD77
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
+#include <string.h>
+#include "functions/dmrData.h"
+#include "hotspot/dmrDefines.h"
+#include "hotspot/CRC.h"
+
+// Motorola CAI network: individual IDs are 12.x.y.z, groups 225.x.y.z
+#define CAI_NETWORK_INDIVIDUAL		0x0C
+#define CAI_NETWORK_GROUP			0xE1
+
+// Compressed UDP/IP (TS 102 361-3) port IDs
+#define UDPC_PORT_ID_ETSI_TEXT		1
+#define UDPC_PORT_ID_MOTOROLA_TMS	98
+#define DMR_UDP_PORT_ETSI_TEXT		5016
+
+dmrDataPacket_t dmrDataRxPacket;
+
+static uint16_t ipIdentification = 0;
+static uint8_t txPacket[DMR_DATA_MAX_PACKET];
+
+// RX reassembly state
+static bool    rxCollecting = false;
+static uint8_t rxBlocksReceived;
+static uint16_t rxBytes;
+
+static void putId(uint8_t *p, uint32_t id)
+{
+	p[0] = (id >> 16) & 0xFF;
+	p[1] = (id >> 8) & 0xFF;
+	p[2] = id & 0xFF;
+}
+
+static uint32_t getId(const uint8_t *p)
+{
+	return (p[0] << 16) | (p[1] << 8) | p[2];
+}
+
+static void putU16(uint8_t *p, uint16_t v)
+{
+	p[0] = v >> 8;
+	p[1] = v & 0xFF;
+}
+
+// Clause B.3.9: the octets are taken in pairs, least significant octet of each 16 bit word first,
+// MSB first, generator 0x04C11DB7, initial remainder zero.
+// A zero initial value makes the direct form equivalent to the spec's augmented form.
+uint32_t dmrDataCRC32(const uint8_t *data, int length)
+{
+	uint32_t crc = 0;
+	int paddedLength = (length + 1) & ~1;
+
+	for (int i = 0; i < paddedLength; i++)
+	{
+		int idx = i ^ 1;// swap the octets of each 16 bit word
+		crc ^= (uint32_t)((idx < length) ? data[idx] : 0) << 24;
+
+		for (int b = 0; b < 8; b++)
+		{
+			crc = (crc & 0x80000000) ? ((crc << 1) ^ 0x04C11DB7) : (crc << 1);
+		}
+	}
+
+	return crc;
+}
+
+static void addCRC16(uint8_t *buf, uint8_t mask)
+{
+	CRC_addCCITT162(buf, 12);
+	buf[10] ^= mask;
+	buf[11] ^= mask;
+}
+
+static bool checkCRC16(const uint8_t *in, uint8_t mask)
+{
+	uint8_t buf[12];
+
+	memcpy(buf, in, 12);
+	buf[10] ^= mask;
+	buf[11] ^= mask;
+	return CRC_checkCCITT162(buf, 12);
+}
+
+static void setBurst(dmrBurst_t *burst, uint8_t dataType, const uint8_t *payload, uint8_t length)
+{
+	burst->dataType = dataType;
+	burst->length = length;
+	burst->flags = DMR_BURST_FLAG_MCU_CRC;
+	memcpy(burst->payload, payload, length);
+}
+
+int dmrDataBuildCSBK(const uint8_t csbk[10], dmrBurst_t *out)
+{
+	uint8_t buf[12];
+
+	memcpy(buf, csbk, 10);
+	addCRC16(buf, 0xA5);
+	setBurst(out, DT_CSBK, buf, 12);
+
+	return 1;
+}
+
+// Unconfirmed Rate 1/2 packet, preceded by preamble CSBKs
+int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint32_t src,
+						const uint8_t *data, int length, int preambles, dmrBurst_t *out, int maxBursts)
+{
+	int blocks = (length + 4 + 11) / 12;
+	int padOctets = (blocks * 12) - 4 - length;
+	int bursts = preambles + 1 + blocks;
+	uint8_t buf[12];
+
+	if ((length <= 0) || (padOctets > 31) || (blocks > 127) || (bursts > maxBursts) || ((blocks * 12) > DMR_DATA_MAX_PACKET))
+	{
+		return 0;
+	}
+
+	for (int i = 0; i < preambles; i++)
+	{
+		buf[0] = 0x80 | DMR_CSBKO_PREAMBLE;// Last Block
+		buf[1] = 0x00;// FID
+		buf[2] = 0x80 | (group ? 0x40 : 0x00);// Data follows, G/I
+		buf[3] = bursts - 1 - i;// CSBK blocks to follow
+		putId(&buf[4], dst);
+		putId(&buf[7], src);
+		dmrDataBuildCSBK(buf, out++);
+	}
+
+	// Figure 8.3, unconfirmed data header
+	buf[0] = (group ? 0x80 : 0x00) | ((padOctets & 0x10) ? 0x10 : 0x00) | (dpf & 0x0F);
+	buf[1] = (sap << 4) | (padOctets & 0x0F);
+	putId(&buf[2], dst);
+	putId(&buf[5], src);
+	buf[8] = 0x80 | blocks;// Full message
+	buf[9] = 0x00;// FSN: unconfirmed single fragment
+	addCRC16(buf, 0xCC);
+	setBurst(out++, DT_DATA_HEADER, buf, 12);
+
+	memcpy(txPacket, data, length);
+	memset(&txPacket[length], 0, padOctets);
+	uint32_t crc = dmrDataCRC32(txPacket, length + padOctets);
+	uint8_t *crcPos = &txPacket[length + padOctets];
+	// Least significant CRC octet first (figure B.8C)
+	crcPos[0] = crc & 0xFF;
+	crcPos[1] = (crc >> 8) & 0xFF;
+	crcPos[2] = (crc >> 16) & 0xFF;
+	crcPos[3] = (crc >> 24) & 0xFF;
+
+	for (int i = 0; i < blocks; i++)
+	{
+		setBurst(out++, DT_RATE_12_DATA, &txPacket[i * 12], 12);
+	}
+
+	return bursts;
+}
+
+static uint16_t onesComplementSum(uint32_t sum, const uint8_t *data, int length)
+{
+	for (int i = 0; i < length; i += 2)
+	{
+		sum += (data[i] << 8) | (((i + 1) < length) ? data[i + 1] : 0);
+	}
+
+	while (sum >> 16)
+	{
+		sum = (sum & 0xFFFF) + (sum >> 16);
+	}
+
+	return sum;
+}
+
+int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t port,
+						const uint8_t *payload, int length, int preambles, dmrBurst_t *out, int maxBursts)
+{
+	static uint8_t ip[DMR_DATA_MAX_PACKET];
+	int total = 28 + length;
+
+	if (total > (DMR_DATA_MAX_PACKET - 16))
+	{
+		return 0;
+	}
+
+	memset(ip, 0, 28);
+	ip[0] = 0x45;// IPv4, 20 byte header
+	putU16(&ip[2], total);
+	putU16(&ip[4], ipIdentification++);
+	ip[8] = group ? 1 : 64;// TTL
+	ip[9] = 17;// UDP
+	ip[12] = CAI_NETWORK_INDIVIDUAL;
+	putId(&ip[13], src);
+	ip[16] = group ? CAI_NETWORK_GROUP : CAI_NETWORK_INDIVIDUAL;
+	putId(&ip[17], dst);
+	putU16(&ip[10], ~onesComplementSum(0, ip, 20));
+
+	putU16(&ip[20], port);
+	putU16(&ip[22], port);
+	putU16(&ip[24], 8 + length);
+	memcpy(&ip[28], payload, length);
+
+	// UDP checksum over the pseudo header (addresses, protocol, UDP length) and the datagram
+	uint16_t sum = onesComplementSum(17 + 8 + length, &ip[12], 8);
+	sum = ~onesComplementSum(sum, &ip[20], 8 + length);
+	putU16(&ip[26], (sum == 0) ? 0xFFFF : sum);
+
+	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, group, dst, src, ip, total, preambles, out, maxBursts);
+}
+
+// Motorola TMS simple text message: length, header (0xA0, or 0xE0 to request an ACK), no address,
+// sequence number, encoding, then the text as UTF-16LE
+int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
+						int preambles, dmrBurst_t *out, int maxBursts)
+{
+	static uint8_t tms[6 + (2 * 140)];
+	int textLen = strlen(text);
+
+	if (textLen > 140)
+	{
+		textLen = 140;
+	}
+
+	int length = 6 + (2 * textLen);
+	putU16(&tms[0], length - 2);
+	tms[2] = ackRequested ? 0xE0 : 0xA0;
+	tms[3] = 0x00;
+	tms[4] = 0x80 | (seq & 0x1F);
+	tms[5] = 0x04;
+
+	for (int i = 0; i < textLen; i++)
+	{
+		tms[6 + (2 * i)] = (uint8_t)text[i];
+		tms[7 + (2 * i)] = 0x00;
+	}
+
+	return dmrDataBuildUDP(group, dst, src, DMR_UDP_PORT_TMS, tms, length, preambles, out, maxBursts);
+}
+
+// Figure 8.5 response header: class 0, type 1 (ACK), status = N(S) of the packet being acknowledged
+int dmrDataBuildResponseAck(uint8_t sap, uint32_t dst, uint32_t src, uint8_t sendSeq, dmrBurst_t *out)
+{
+	uint8_t buf[12];
+
+	buf[0] = DMR_DPF_RESPONSE;
+	buf[1] = sap << 4;
+	putId(&buf[2], dst);
+	putId(&buf[5], src);
+	buf[8] = 0x00;
+	buf[9] = (0x01 << 3) | (sendSeq & 0x07);
+	addCRC16(buf, 0xCC);
+	setBurst(out, DT_DATA_HEADER, buf, 12);
+
+	return 1;
+}
+
+int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *out, int maxBursts)
+{
+	uint8_t ack[5] = { 0x00, 0x03, 0xBF, 0x00, seqByte };
+
+	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, ack, sizeof(ack), 0, out, maxBursts);
+}
+
+void dmrDataRxReset(void)
+{
+	rxCollecting = false;
+}
+
+static bool parseHeader(const uint8_t *h, dmrDataPacket_t *p)
+{
+	p->dpf = h[0] & 0x0F;
+	p->sap = h[1] >> 4;
+	p->group = (h[0] & 0x80) != 0;
+	p->responseRequested = (h[0] & 0x40) != 0;
+	p->dst = getId(&h[2]);
+	p->src = getId(&h[5]);
+	p->length = 0;
+	p->sendSeq = 0;
+
+	switch (p->dpf)
+	{
+		case DMR_DPF_UNCONFIRMED:
+		case DMR_DPF_CONFIRMED:
+			p->blocksToFollow = h[8] & 0x7F;
+			p->padOctets = ((h[0] & 0x10) ? 0x10 : 0x00) | (h[1] & 0x0F);
+			p->sendSeq = (h[9] >> 4) & 0x07;
+			break;
+		case DMR_DPF_DEFINED_SHORT:
+		case DMR_DPF_RAW_SHORT:
+			// Appended blocks are split over octets 0 and 1, octet 9 holds the bit padding
+			p->blocksToFollow = (((h[0] >> 4) & 0x03) << 4) | (h[1] & 0x0F);
+			p->padOctets = h[9] / 8;
+			break;
+		case DMR_DPF_RESPONSE:
+			p->blocksToFollow = h[8] & 0x7F;
+			p->padOctets = 0;
+			break;
+		case DMR_DPF_UDT:
+			p->blocksToFollow = (h[8] & 0x03) + 1;// appended blocks are stored minus one
+			p->padOctets = 0;
+			break;
+		default:
+			return false;
+	}
+
+	return true;
+}
+
+dmrDataRxResult_t dmrDataRxBurst(const dmrBurst_t *burst)
+{
+	dmrDataPacket_t *p = &dmrDataRxPacket;
+
+	switch (burst->dataType)
+	{
+		case DT_CSBK:
+			if (!checkCRC16(burst->payload, 0xA5))
+			{
+				return DMR_DATA_RX_ERROR;
+			}
+			return ((burst->payload[0] & 0x3F) == DMR_CSBKO_PREAMBLE) ? DMR_DATA_RX_NONE : DMR_DATA_RX_CSBK;
+
+		case DT_DATA_HEADER:
+			// SAP 9 in the first header means a proprietary second header follows, it counts as one of the blocks to follow
+			if (rxCollecting && (rxBlocksReceived == 0) && (p->sap == DMR_SAP_PROPRIETARY))
+			{
+				if (++rxBlocksReceived >= p->blocksToFollow)
+				{
+					rxCollecting = false;
+				}
+				return DMR_DATA_RX_NONE;
+			}
+
+			rxCollecting = false;
+			if (!checkCRC16(burst->payload, 0xCC) || !parseHeader(burst->payload, p))
+			{
+				return DMR_DATA_RX_ERROR;
+			}
+
+			if (p->blocksToFollow == 0)
+			{
+				p->dataType = DT_DATA_HEADER;
+				return DMR_DATA_RX_PACKET;
+			}
+			rxCollecting = true;
+			rxBlocksReceived = 0;
+			rxBytes = 0;
+			return DMR_DATA_RX_NONE;
+
+		case DT_RATE_12_DATA:
+		case DT_RATE_34_DATA:
+		case DT_RATE_1_DATA:
+			{
+				if (!rxCollecting)
+				{
+					return DMR_DATA_RX_NONE;
+				}
+
+				// Confirmed blocks start with the 7 bit serial number and the CRC-9
+				int skip = (p->dpf == DMR_DPF_CONFIRMED) ? 2 : 0;
+				int len = burst->length - skip;
+
+				if ((len <= 0) || ((rxBytes + len) > DMR_DATA_MAX_PACKET))
+				{
+					rxCollecting = false;
+					return DMR_DATA_RX_ERROR;
+				}
+
+				memcpy(&p->data[rxBytes], &burst->payload[skip], len);
+				rxBytes += len;
+				p->dataType = burst->dataType;
+
+				if (++rxBlocksReceived < p->blocksToFollow)
+				{
+					return DMR_DATA_RX_NONE;
+				}
+
+				rxCollecting = false;
+
+				if (p->dpf == DMR_DPF_UDT)
+				{
+					// UDT blocks end with a CRC-CCITT, leave the decoding to the user
+					p->length = rxBytes;
+					return DMR_DATA_RX_PACKET;
+				}
+
+				if ((rxBytes < 4) || ((rxBytes - 4) < p->padOctets))
+				{
+					return DMR_DATA_RX_ERROR;
+				}
+
+				const uint8_t *c = &p->data[rxBytes - 4];
+				uint32_t rxCrc = c[0] | (c[1] << 8) | (c[2] << 16) | ((uint32_t)c[3] << 24);
+
+				if (dmrDataCRC32(p->data, rxBytes - 4) != rxCrc)
+				{
+					return DMR_DATA_RX_ERROR;
+				}
+
+				p->length = rxBytes - 4 - p->padOctets;
+				return DMR_DATA_RX_PACKET;
+			}
+
+		default:
+			return DMR_DATA_RX_NONE;
+	}
+}
+
+static uint16_t compressedPort(uint8_t portId, const uint8_t **ptr)
+{
+	uint16_t port;
+
+	switch (portId)
+	{
+		case 0:
+			port = ((*ptr)[0] << 8) | (*ptr)[1];
+			*ptr += 2;
+			return port;
+		case UDPC_PORT_ID_ETSI_TEXT:
+			return DMR_UDP_PORT_ETSI_TEXT;
+		case UDPC_PORT_ID_MOTOROLA_TMS:
+			return DMR_UDP_PORT_TMS;
+		default:
+			return 0x8000 | portId;// Unknown, but still reported to the caller
+	}
+}
+
+// Returns the destination port (or the source port when the destination is not a well known one) and the UDP payload
+bool dmrDataGetUDP(const dmrDataPacket_t *packet, uint16_t *port, const uint8_t **payload, int *length)
+{
+	const uint8_t *d = packet->data;
+	int len = packet->length;
+
+	if (packet->sap == DMR_SAP_IP)
+	{
+		int ihl = (d[0] & 0x0F) * 4;
+
+		if ((len < 28) || ((d[0] >> 4) != 4) || (d[9] != 17) || (len < (ihl + 8)))
+		{
+			return false;
+		}
+
+		uint16_t srcPort = (d[ihl] << 8) | d[ihl + 1];
+		uint16_t dstPort = (d[ihl + 2] << 8) | d[ihl + 3];
+		int udpLen = (d[ihl + 4] << 8) | d[ihl + 5];
+
+		*port = ((dstPort == DMR_UDP_PORT_LRRP) || (dstPort == DMR_UDP_PORT_ARS) || (dstPort == DMR_UDP_PORT_TMS)) ? dstPort : srcPort;
+		*payload = &d[ihl + 8];
+		*length = len - ihl - 8;
+		if ((udpLen >= 8) && ((udpLen - 8) < *length))
+		{
+			*length = udpLen - 8;
+		}
+		return true;
+	}
+
+	if (packet->sap == 0x03)// UDP/IP header compression
+	{
+		if (len < 5)
+		{
+			return false;
+		}
+
+		const uint8_t *ptr = &d[5];
+		uint16_t srcPort = compressedPort(d[3] & 0x7F, &ptr);
+		uint16_t dstPort = compressedPort(d[4] & 0x7F, &ptr);
+
+		*port = (dstPort & 0x8000) ? srcPort : dstPort;
+		*payload = ptr;
+		*length = len - (ptr - d);
+		return (*length >= 0);
+	}
+
+	return false;
+}
+
+bool dmrDataDecodeTMS(const uint8_t *payload, int length, dmrDataTMS_t *tms)
+{
+	if (length < 4)
+	{
+		return false;
+	}
+
+	uint8_t h = payload[2];
+	int end = ((payload[0] << 8) | payload[1]) + 2;
+	int idx = 4 + payload[3];// skip the address
+
+	if (end > length)
+	{
+		end = length;
+	}
+
+	tms->ackRequested = (h & 0x40) != 0;
+	tms->isAck = (h & 0x1F) == 0x1F;
+	tms->seqByte = 0;
+	tms->text[0] = 0;
+
+	if (tms->isAck)
+	{
+		tms->seqByte = (idx < end) ? payload[idx] : 0;
+		return true;
+	}
+
+	if ((h & 0x10) || (h & 0x0F))
+	{
+		return false;// control PDU, not a simple text message
+	}
+
+	if (h & 0x80)
+	{
+		// sequence number and encoding octets, each with an extension bit
+		if (idx < end)
+		{
+			tms->seqByte = payload[idx];
+		}
+
+		while (idx < end)
+		{
+			if ((payload[idx++] & 0x80) == 0)
+			{
+				break;
+			}
+		}
+	}
+
+	int n = 0;
+	for (; ((idx + 1) < end) && (n < (int)(sizeof(tms->text) - 1)); idx += 2)
+	{
+		uint16_t c = payload[idx] | (payload[idx + 1] << 8);
+
+		if (c == 0)
+		{
+			break;
+		}
+
+		if ((c == '\r') || (c == '\n'))
+		{
+			if (n == 0)
+			{
+				continue;// some radios start the text with CR LF
+			}
+			c = ' ';
+		}
+
+		tms->text[n++] = (c < 0x100) ? c : '?';
+	}
+	tms->text[n] = 0;
+
+	return true;
+}

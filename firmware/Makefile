@@ -221,12 +221,14 @@ CC  := arm-none-eabi-gcc
 AS  := arm-none-eabi-as
 CP  := arm-none-eabi-objcopy
 SZ  := arm-none-eabi-size
+OD  := arm-none-eabi-objdump
 
 all: $(SGL_FILE)
 
 $(SGL_FILE): firmware.axf
 	$(ECHO) 'Performing post-build steps'
 	$(Q)$(SZ) $(BUILD_DIR)/firmware.axf
+	$(Q)set -- $$($(OD) -h $(BUILD_DIR)/firmware.axf | awk '$$2 == ".data" { print $$3, $$5 }'); echo "Flash free before the codec at 0x50000: $$(( 0x50000 - 0x$$1 - 0x$$2 )) bytes"
 	$(Q)$(CP) -v -O binary $(BUILD_DIR)/firmware.axf $(BUILD_DIR)/firmware.bin
 	$(Q) ../tools/bin2sgl $(BIN2SGL_OPT) $(BUILD_DIR)/firmware.bin
 	$(Q) mv $(BUILD_DIR)/firmware.sgl $(BUILD_DIR)/$(SGL_FILE)
@@ -251,6 +253,16 @@ $(BUILD_DIR)/%.o : %.c
 	$(Q)$(MKDIR_P) $(dir $@)
 	$(ECHO) "[CC ] $<"
 	$(Q)$(CC)  $(DFLAGS) $(CFLAGS) $(OPTLEVEL) $< -o $@
+
+# No built-in suffix rules: on a case-insensitive file system (macOS) the built-in .S -> .s rule
+# treats source/dmr_codec/codec_bin.S as an intermediate codec_bin.s and deletes it after the build
+.SUFFIXES:
+.SECONDARY:
+
+$(BUILD_DIR)/%.o: %.S
+	$(Q)$(MKDIR_P) $(dir $@)
+	$(ECHO) "[AS ] $<"
+	$(Q)$(CC) $(DFLAGS) $(CFLAGS) $< -o $@
 
 .PHONY: clean
 
