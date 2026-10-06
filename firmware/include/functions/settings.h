@@ -52,7 +52,8 @@ typedef enum
 	BIT_BATTERY_VOLTAGE_IN_HEADER   = (1 << 3),
 	BIT_SETTINGS_UPDATED            = (1 << 4),
 	BIT_TX_RX_FREQ_LOCK             = (1 << 5),
-	BIT_ALL_LEDS_DISABLED           = (1 << 6)
+	BIT_ALL_LEDS_DISABLED           = (1 << 6),
+	BIT_USB_NETWORK                 = (1 << 7)  // enumerate as serial port + CDC-NCM network adapter (next boot)
 } bitfieldOptions_t;
 
 typedef struct

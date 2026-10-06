@@ -1,3 +1,8 @@
 dmrDataTest
 dmrDataTest.out
 *.dSYM/
+ipGatewayTest
+ipGatewayTest.pcap
+ipGatewayTest.expert
+ipGatewayTest16
+ipGatewayTest16.pcap

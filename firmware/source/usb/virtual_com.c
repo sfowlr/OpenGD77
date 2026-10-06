@@ -22,6 +22,9 @@
 #include "drivers/fsl_common.h"
 
 #include "usb/usb_com.h"
+#include "usb/usb_ncm.h"
+#include "functions/ipGateway.h"
+#include "functions/settings.h"
 
 /*******************************************************************************
 * Definitions
@@ -72,12 +75,15 @@ USB_DMA_NONINIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE) static usb_cdc_acm_info_t s_usbC
 USB_DMA_NONINIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE) static uint8_t s_currRecvBuf[DATA_BUFF_SIZE];
 USB_DMA_NONINIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE) static uint8_t s_currSendBuf[DATA_BUFF_SIZE];
 
-/* USB device class information */
-static usb_device_class_config_struct_t s_cdcAcmConfig[1] = {{
-    USB_DeviceCdcVcomCallback, 0, &g_UsbDeviceCdcVcomConfig,
-}};
+extern usb_device_class_struct_t g_UsbDeviceNcmConfig;
 
-/* USB device class configuration information */
+/* USB device class information: the serial port, and the CDC-NCM network function in composite mode */
+static usb_device_class_config_struct_t s_cdcAcmConfig[2] = {
+    {USB_DeviceCdcVcomCallback, 0, &g_UsbDeviceCdcVcomConfig},
+    {NULL, 0, &g_UsbDeviceNcmConfig},
+};
+
+/* USB device class configuration information, the count is set at init */
 static usb_device_class_config_list_struct_t s_cdcAcmConfigList = {
     s_cdcAcmConfig, USB_DeviceCallback, 1,
 };
@@ -394,6 +400,19 @@ usb_status_t USB_DeviceCallback(usb_device_handle handle, uint32_t event, void *
         case kUSB_DeviceEventGetConfiguration:
             break;
         case kUSB_DeviceEventGetInterface:
+            if (s_cdcVcom.attach)
+            {
+                uint8_t interface = (uint8_t)((*temp16 & 0xFF00U) >> 0x08U);
+                uint8_t alternate = (interface == USB_NCM_DATA_INTERFACE_INDEX) ? usbNcmGetDataAlternate() : 0;
+                *temp16 = (*temp16 & 0xFF00U) | alternate;
+                error = kStatus_USB_Success;
+            }
+            break;
+        case kUSB_DeviceEventVendorRequest:
+            if (param)
+            {
+                error = USB_DeviceMsOsVendorRequest((usb_device_control_request_struct_t *)param);
+            }
             break;
         case kUSB_DeviceEventGetDeviceDescriptor:
             if (param)
@@ -428,9 +447,23 @@ usb_status_t USB_DeviceCallback(usb_device_handle handle, uint32_t event, void *
  *
  * @return None.
  */
+// Locally administered MAC addresses from the MCU unique ID: 02:47:44 (G D) for the host, 06:47:44 for the radio
+static void usbNetworkInit(void)
+{
+    uint32_t uid = SIM->UIDL ^ SIM->UIDML ^ SIM->UIDMH;
+    uint8_t hostMac[6] = {0x02, 0x47, 0x44, (uid >> 16) & 0xFF, (uid >> 8) & 0xFF, uid & 0xFF};
+    uint8_t gatewayMac[6] = {0x06, 0x47, 0x44, (uid >> 16) & 0xFF, (uid >> 8) & 0xFF, uid & 0xFF};
+    bool composite = settingsIsOptionBitSet(BIT_USB_NETWORK);
+
+    USB_DeviceDescriptorsSelect(composite, hostMac);
+    ipGatewayInit(gatewayMac, hostMac);
+    s_cdcAcmConfigList.count = composite ? 2 : 1;
+}
+
 void USB_DeviceApplicationInit(void)
 {
     USB_DeviceClockInit();
+    usbNetworkInit();
 
     s_cdcVcom.speed = USB_SPEED_HIGH;
     s_cdcVcom.attach = 0;

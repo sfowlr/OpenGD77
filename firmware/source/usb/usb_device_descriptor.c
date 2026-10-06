@@ -91,7 +91,7 @@ uint8_t g_UsbDeviceDescriptor[] = {
     /* Vendor ID (assigned by the USB-IF) */
     0xC9U, 0x1FU,
     /* Product ID (assigned by the manufacturer) */
-    0x94, 0x00,
+    USB_SHORT_GET_LOW(USB_DEVICE_PRODUCT_ID), USB_SHORT_GET_HIGH(USB_DEVICE_PRODUCT_ID),
     /* Device release number in binary-coded decimal */
     USB_SHORT_GET_LOW(USB_DEVICE_DEMO_BCD_VERSION), USB_SHORT_GET_HIGH(USB_DEVICE_DEMO_BCD_VERSION),
     /* Index of string descriptor describing manufacturer */
@@ -188,6 +188,121 @@ uint8_t g_UsbDeviceConfigurationDescriptor[] = {
     USB_SHORT_GET_HIGH(FS_CDC_VCOM_BULK_OUT_PACKET_SIZE), 0x00, /* The polling interval value is every 0 Frames */
 };
 
+/* CDC-NCM function, the network side of the composite device */
+usb_device_endpoint_struct_t g_UsbDeviceNcmCommEndpoints[1] = {
+    {USB_NCM_INTERRUPT_IN_ENDPOINT | (USB_IN << 7U), USB_ENDPOINT_INTERRUPT, FS_NCM_INTERRUPT_IN_PACKET_SIZE},
+};
+
+usb_device_endpoint_struct_t g_UsbDeviceNcmDataEndpoints[2] = {
+    {USB_NCM_BULK_ENDPOINT | (USB_IN << 7U), USB_ENDPOINT_BULK, FS_NCM_BULK_PACKET_SIZE},
+    {USB_NCM_BULK_ENDPOINT | (USB_OUT << 7U), USB_ENDPOINT_BULK, FS_NCM_BULK_PACKET_SIZE},
+};
+
+usb_device_interface_struct_t g_UsbDeviceNcmCommInterface[] = {{0, {1, g_UsbDeviceNcmCommEndpoints}}};
+
+/* Alternate setting 0 has no endpoints (link down), 1 has the two bulk endpoints */
+usb_device_interface_struct_t g_UsbDeviceNcmDataInterface[] = {{0, {0, NULL}}, {1, {2, g_UsbDeviceNcmDataEndpoints}}};
+
+usb_device_interfaces_struct_t g_UsbDeviceNcmInterfaces[2] = {
+    {CDC_COMM_CLASS, USB_CDC_NCM_SUBCLASS, 0x00, USB_NCM_COMM_INTERFACE_INDEX, g_UsbDeviceNcmCommInterface, 1},
+    {CDC_DATA_CLASS, 0x00, USB_CDC_NCM_DATA_PROTOCOL, USB_NCM_DATA_INTERFACE_INDEX, g_UsbDeviceNcmDataInterface, 2},
+};
+
+usb_device_interface_list_t g_UsbDeviceNcmInterfaceList[USB_DEVICE_CONFIGURATION_COUNT] = {{2, g_UsbDeviceNcmInterfaces}};
+
+usb_device_class_struct_t g_UsbDeviceNcmConfig = {
+    g_UsbDeviceNcmInterfaceList, kUSB_DeviceClassTypeCdcNcm, USB_DEVICE_CONFIGURATION_COUNT,
+};
+
+/* Composite configuration: an IAD per function, the serial port first so that it stays interfaces 0 and 1 */
+USB_DMA_INIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE)
+uint8_t g_UsbDeviceCompositeConfigurationDescriptor[] = {
+    USB_DESCRIPTOR_LENGTH_CONFIGURE, USB_DESCRIPTOR_TYPE_CONFIGURE,
+    0x00, 0x00, /* wTotalLength, set by USB_DeviceDescriptorsSelect */
+    USB_COMPOSITE_INTERFACE_COUNT, USB_CDC_VCOM_CONFIGURE_INDEX, 0,
+    (USB_DESCRIPTOR_CONFIGURE_ATTRIBUTE_D7_MASK) |
+        (USB_DEVICE_CONFIG_SELF_POWER << USB_DESCRIPTOR_CONFIGURE_ATTRIBUTE_SELF_POWERED_SHIFT) |
+        (USB_DEVICE_CONFIG_REMOTE_WAKEUP << USB_DESCRIPTOR_CONFIGURE_ATTRIBUTE_REMOTE_WAKEUP_SHIFT),
+    USB_DEVICE_MAX_POWER,
+
+    /* Serial port: IAD, then the same interfaces as the serial port only configuration */
+    8, USB_DESCRIPTOR_TYPE_IAD, USB_CDC_VCOM_COMM_INTERFACE_INDEX, 2, USB_CDC_VCOM_CIC_CLASS, USB_CDC_VCOM_CIC_SUBCLASS,
+    USB_CDC_VCOM_CIC_PROTOCOL, 0x00,
+
+    USB_DESCRIPTOR_LENGTH_INTERFACE, USB_DESCRIPTOR_TYPE_INTERFACE, USB_CDC_VCOM_COMM_INTERFACE_INDEX, 0x00,
+    USB_CDC_VCOM_ENDPOINT_CIC_COUNT, USB_CDC_VCOM_CIC_CLASS, USB_CDC_VCOM_CIC_SUBCLASS, USB_CDC_VCOM_CIC_PROTOCOL, 0x00,
+    USB_DESCRIPTOR_LENGTH_CDC_HEADER_FUNC, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_HEADER_FUNC_DESC, 0x10, 0x01,
+    USB_DESCRIPTOR_LENGTH_CDC_CALL_MANAG, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_CALL_MANAGEMENT_FUNC_DESC, 0x01, 0x01,
+    USB_DESCRIPTOR_LENGTH_CDC_ABSTRACT, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_ABSTRACT_CONTROL_FUNC_DESC, 0x06,
+    USB_DESCRIPTOR_LENGTH_CDC_UNION_FUNC, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_UNION_FUNC_DESC,
+    USB_CDC_VCOM_COMM_INTERFACE_INDEX, USB_CDC_VCOM_DATA_INTERFACE_INDEX,
+    USB_DESCRIPTOR_LENGTH_ENDPOINT, USB_DESCRIPTOR_TYPE_ENDPOINT, USB_CDC_VCOM_INTERRUPT_IN_ENDPOINT | (USB_IN << 7U),
+    USB_ENDPOINT_INTERRUPT, USB_SHORT_GET_LOW(FS_CDC_VCOM_INTERRUPT_IN_PACKET_SIZE),
+    USB_SHORT_GET_HIGH(FS_CDC_VCOM_INTERRUPT_IN_PACKET_SIZE), FS_CDC_VCOM_INTERRUPT_IN_INTERVAL,
+
+    USB_DESCRIPTOR_LENGTH_INTERFACE, USB_DESCRIPTOR_TYPE_INTERFACE, USB_CDC_VCOM_DATA_INTERFACE_INDEX, 0x00,
+    USB_CDC_VCOM_ENDPOINT_DIC_COUNT, USB_CDC_VCOM_DIC_CLASS, USB_CDC_VCOM_DIC_SUBCLASS, USB_CDC_VCOM_DIC_PROTOCOL, 0x00,
+    USB_DESCRIPTOR_LENGTH_ENDPOINT, USB_DESCRIPTOR_TYPE_ENDPOINT, USB_CDC_VCOM_BULK_IN_ENDPOINT | (USB_IN << 7U),
+    USB_ENDPOINT_BULK, USB_SHORT_GET_LOW(FS_CDC_VCOM_BULK_IN_PACKET_SIZE), USB_SHORT_GET_HIGH(FS_CDC_VCOM_BULK_IN_PACKET_SIZE), 0x00,
+    USB_DESCRIPTOR_LENGTH_ENDPOINT, USB_DESCRIPTOR_TYPE_ENDPOINT, USB_CDC_VCOM_BULK_OUT_ENDPOINT | (USB_OUT << 7U),
+    USB_ENDPOINT_BULK, USB_SHORT_GET_LOW(FS_CDC_VCOM_BULK_OUT_PACKET_SIZE), USB_SHORT_GET_HIGH(FS_CDC_VCOM_BULK_OUT_PACKET_SIZE), 0x00,
+
+    /* Network: IAD, NCM communication interface */
+    8, USB_DESCRIPTOR_TYPE_IAD, USB_NCM_COMM_INTERFACE_INDEX, 2, CDC_COMM_CLASS, USB_CDC_NCM_SUBCLASS, 0x00, 0x00,
+
+    USB_DESCRIPTOR_LENGTH_INTERFACE, USB_DESCRIPTOR_TYPE_INTERFACE, USB_NCM_COMM_INTERFACE_INDEX, 0x00, 1,
+    CDC_COMM_CLASS, USB_CDC_NCM_SUBCLASS, 0x00, 0x00,
+    USB_DESCRIPTOR_LENGTH_CDC_HEADER_FUNC, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_HEADER_FUNC_DESC, 0x10, 0x01,
+    USB_DESCRIPTOR_LENGTH_CDC_UNION_FUNC, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_UNION_FUNC_DESC,
+    USB_NCM_COMM_INTERFACE_INDEX, USB_NCM_DATA_INTERFACE_INDEX,
+    /* Ethernet networking: iMACAddress, no statistics, wMaxSegmentSize 1514, no multicast or power filters */
+    13, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_ETHERNET_NETWORKING_FUNC_DESC, USB_NCM_MAC_STRING_INDEX,
+    0x00, 0x00, 0x00, 0x00, USB_SHORT_GET_LOW(1514), USB_SHORT_GET_HIGH(1514), 0x00, 0x00, 0x00,
+    /* NCM 1.00, no optional capabilities */
+    6, USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE, USB_CDC_NCM_FUNC_DESC, 0x00, 0x01, 0x00,
+    USB_DESCRIPTOR_LENGTH_ENDPOINT, USB_DESCRIPTOR_TYPE_ENDPOINT, USB_NCM_INTERRUPT_IN_ENDPOINT | (USB_IN << 7U),
+    USB_ENDPOINT_INTERRUPT, USB_SHORT_GET_LOW(FS_NCM_INTERRUPT_IN_PACKET_SIZE), USB_SHORT_GET_HIGH(FS_NCM_INTERRUPT_IN_PACKET_SIZE),
+    FS_NCM_INTERRUPT_IN_INTERVAL,
+
+    /* NCM data interface, alternate setting 0: no endpoints */
+    USB_DESCRIPTOR_LENGTH_INTERFACE, USB_DESCRIPTOR_TYPE_INTERFACE, USB_NCM_DATA_INTERFACE_INDEX, 0x00, 0,
+    CDC_DATA_CLASS, 0x00, USB_CDC_NCM_DATA_PROTOCOL, 0x00,
+    /* alternate setting 1: the bulk endpoints */
+    USB_DESCRIPTOR_LENGTH_INTERFACE, USB_DESCRIPTOR_TYPE_INTERFACE, USB_NCM_DATA_INTERFACE_INDEX, 0x01, 2,
+    CDC_DATA_CLASS, 0x00, USB_CDC_NCM_DATA_PROTOCOL, 0x00,
+    USB_DESCRIPTOR_LENGTH_ENDPOINT, USB_DESCRIPTOR_TYPE_ENDPOINT, USB_NCM_BULK_ENDPOINT | (USB_IN << 7U),
+    USB_ENDPOINT_BULK, USB_SHORT_GET_LOW(FS_NCM_BULK_PACKET_SIZE), USB_SHORT_GET_HIGH(FS_NCM_BULK_PACKET_SIZE), 0x00,
+    USB_DESCRIPTOR_LENGTH_ENDPOINT, USB_DESCRIPTOR_TYPE_ENDPOINT, USB_NCM_BULK_ENDPOINT | (USB_OUT << 7U),
+    USB_ENDPOINT_BULK, USB_SHORT_GET_LOW(FS_NCM_BULK_PACKET_SIZE), USB_SHORT_GET_HIGH(FS_NCM_BULK_PACKET_SIZE), 0x00,
+};
+
+/* The host side MAC address of the NCM link, as 12 hex digits */
+USB_DMA_INIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE)
+uint8_t g_UsbDeviceStringMac[2U + 2U * 12U] = {2U + 2U * 12U, USB_DESCRIPTOR_TYPE_STRING};
+
+/* Microsoft OS 1.0 descriptors: the "MSFT100" string at index 0xEE gives the vendor request code, and the
+ * Extended Compat ID gives the NCM function the WINNCM compatible ID, which binds the Windows 10 UsbNcm driver
+ * (Windows 11 binds it from the class codes alone) */
+USB_DMA_INIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE)
+uint8_t g_UsbDeviceStringMsOs[18] = {18, USB_DESCRIPTOR_TYPE_STRING, 'M', 0, 'S', 0, 'F', 0, 'T', 0, '1', 0, '0', 0, '0', 0,
+                                     USB_MS_OS_VENDOR_CODE, 0x00};
+
+USB_DMA_INIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE)
+uint8_t g_UsbDeviceMsOsCompatId[40] = {
+    40, 0, 0, 0,                  /* dwLength */
+    0x00, 0x01,                   /* bcdVersion 1.00 */
+    0x04, 0x00,                   /* wIndex: Extended Compat ID */
+    1,                            /* bCount: one function section */
+    0, 0, 0, 0, 0, 0, 0,          /* reserved */
+    USB_NCM_COMM_INTERFACE_INDEX, /* bFirstInterfaceNumber */
+    0x01,                         /* reserved, must be 1 */
+    'W', 'I', 'N', 'N', 'C', 'M', 0, 0, /* compatibleID */
+    0, 0, 0, 0, 0, 0, 0, 0,       /* subCompatibleID */
+    0, 0, 0, 0, 0, 0,             /* reserved */
+};
+
+static bool compositeSelected = false;
+
 /* Define string descriptor */
 USB_DMA_INIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE)
 uint8_t g_UsbDeviceString0[] = {2U + 2U, USB_DESCRIPTOR_TYPE_STRING, 0x09, 0x04};
@@ -239,11 +354,11 @@ uint8_t g_UsbDeviceString2[] = {2U + 2U * 20U, USB_DESCRIPTOR_TYPE_STRING,
                                 'O',           0};
 
 uint8_t *g_UsbDeviceStringDescriptorArray[USB_DEVICE_STRING_COUNT] = {g_UsbDeviceString0, g_UsbDeviceString1,
-                                                                      g_UsbDeviceString2};
+                                                                      g_UsbDeviceString2, g_UsbDeviceStringMac};
 
 /* Define string descriptor size */
 uint32_t g_UsbDeviceStringDescriptorLength[USB_DEVICE_STRING_COUNT] = {
-    sizeof(g_UsbDeviceString0), sizeof(g_UsbDeviceString1), sizeof(g_UsbDeviceString2)};
+    sizeof(g_UsbDeviceString0), sizeof(g_UsbDeviceString1), sizeof(g_UsbDeviceString2), sizeof(g_UsbDeviceStringMac)};
 usb_language_t g_UsbDeviceLanguage[USB_DEVICE_LANGUAGE_COUNT] = {{
     g_UsbDeviceStringDescriptorArray, g_UsbDeviceStringDescriptorLength, (uint16_t)0x0409,
 }};
@@ -288,11 +403,65 @@ usb_status_t USB_DeviceGetConfigurationDescriptor(
 {
     if (USB_CDC_VCOM_CONFIGURE_INDEX > configurationDescriptor->configuration)
     {
-        configurationDescriptor->buffer = g_UsbDeviceConfigurationDescriptor;
-        configurationDescriptor->length = USB_DESCRIPTOR_LENGTH_CONFIGURATION_ALL;
+        if (compositeSelected)
+        {
+            configurationDescriptor->buffer = g_UsbDeviceCompositeConfigurationDescriptor;
+            configurationDescriptor->length = sizeof(g_UsbDeviceCompositeConfigurationDescriptor);
+        }
+        else
+        {
+            configurationDescriptor->buffer = g_UsbDeviceConfigurationDescriptor;
+            configurationDescriptor->length = USB_DESCRIPTOR_LENGTH_CONFIGURATION_ALL;
+        }
         return kStatus_USB_Success;
     }
     return kStatus_USB_InvalidRequest;
+}
+
+void USB_DeviceDescriptorsSelect(bool composite, const uint8_t hostMac[6])
+{
+    static const char HEX[] = "0123456789ABCDEF";
+
+    compositeSelected = composite;
+
+    /* Composite devices with IADs use the Miscellaneous class, and a different product ID so that
+     * hosts don't reuse the drivers they bound to the serial port only device */
+    g_UsbDeviceDescriptor[4] = composite ? 0xEF : USB_DEVICE_CLASS;
+    g_UsbDeviceDescriptor[5] = composite ? 0x02 : USB_DEVICE_SUBCLASS;
+    g_UsbDeviceDescriptor[6] = composite ? 0x01 : USB_DEVICE_PROTOCOL;
+    g_UsbDeviceDescriptor[10] = USB_SHORT_GET_LOW(composite ? USB_DEVICE_PRODUCT_ID_COMPOSITE : USB_DEVICE_PRODUCT_ID);
+    g_UsbDeviceDescriptor[11] = USB_SHORT_GET_HIGH(composite ? USB_DEVICE_PRODUCT_ID_COMPOSITE : USB_DEVICE_PRODUCT_ID);
+
+    g_UsbDeviceCompositeConfigurationDescriptor[2] = USB_SHORT_GET_LOW(sizeof(g_UsbDeviceCompositeConfigurationDescriptor));
+    g_UsbDeviceCompositeConfigurationDescriptor[3] = USB_SHORT_GET_HIGH(sizeof(g_UsbDeviceCompositeConfigurationDescriptor));
+
+    for (int i = 0; i < 6; i++)
+    {
+        g_UsbDeviceStringMac[2 + (4 * i)] = HEX[hostMac[i] >> 4];
+        g_UsbDeviceStringMac[3 + (4 * i)] = 0;
+        g_UsbDeviceStringMac[4 + (4 * i)] = HEX[hostMac[i] & 0x0F];
+        g_UsbDeviceStringMac[5 + (4 * i)] = 0;
+    }
+}
+
+bool USB_DeviceDescriptorsIsComposite(void)
+{
+    return compositeSelected;
+}
+
+/* Device to host vendor request with our vendor code and wIndex 4: the Extended Compat ID */
+usb_status_t USB_DeviceMsOsVendorRequest(usb_device_control_request_struct_t *request)
+{
+    if (!compositeSelected || !request->isSetup || (request->setup->bRequest != USB_MS_OS_VENDOR_CODE) ||
+        ((request->setup->bmRequestType & USB_REQUEST_TYPE_DIR_MASK) != USB_REQUEST_TYPE_DIR_IN) ||
+        (request->setup->wIndex != 0x0004))
+    {
+        return kStatus_USB_InvalidRequest;
+    }
+
+    request->buffer = g_UsbDeviceMsOsCompatId;
+    request->length = sizeof(g_UsbDeviceMsOsCompatId);
+    return kStatus_USB_Success;
 }
 
 /*!
@@ -308,7 +477,12 @@ usb_status_t USB_DeviceGetConfigurationDescriptor(
 usb_status_t USB_DeviceGetStringDescriptor(usb_device_handle handle,
                                            usb_device_get_string_descriptor_struct_t *stringDescriptor)
 {
-    if (stringDescriptor->stringIndex == 0U)
+    if ((stringDescriptor->stringIndex == USB_MS_OS_STRING_INDEX) && compositeSelected)
+    {
+        stringDescriptor->buffer = g_UsbDeviceStringMsOs;
+        stringDescriptor->length = sizeof(g_UsbDeviceStringMsOs);
+    }
+    else if (stringDescriptor->stringIndex == 0U)
     {
         stringDescriptor->buffer = (uint8_t *)g_UsbDeviceLanguageList.languageString;
         stringDescriptor->length = g_UsbDeviceLanguageList.stringLength;

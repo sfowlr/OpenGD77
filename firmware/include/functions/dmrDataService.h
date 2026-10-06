@@ -34,7 +34,7 @@ typedef struct
 
 // Requests are queued and started from the main task by dmrDataServiceTick()
 bool dmrDataServiceSendSMS(bool group, uint32_t dst, const char *text, bool ackRequested);
-bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t port, const uint8_t *payload, int length);
+bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length);
 bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count);
 bool dmrDataServiceIsBusy(void);
 void dmrDataServiceTick(void);

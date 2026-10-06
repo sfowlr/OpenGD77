@@ -96,7 +96,7 @@
 
 /* Configuration, interface and endpoint. */
 #define USB_DEVICE_CONFIGURATION_COUNT (1)
-#define USB_DEVICE_STRING_COUNT (3)
+#define USB_DEVICE_STRING_COUNT (4)
 #define USB_DEVICE_LANGUAGE_COUNT (1)
 
 #define USB_CDC_VCOM_CONFIGURE_INDEX (1)
@@ -127,6 +127,25 @@
 
 #define USB_DESCRIPTOR_TYPE_CDC_CS_INTERFACE (0x24)
 #define USB_DESCRIPTOR_TYPE_CDC_CS_ENDPOINT (0x25)
+
+/* USB network (CDC-NCM) composite mode, see usb_ncm.c. The serial port keeps interfaces 0 and 1 and endpoints 1-3 */
+#define USB_DEVICE_PRODUCT_ID (0x0094)
+#define USB_DEVICE_PRODUCT_ID_COMPOSITE (0x0095)
+#define USB_COMPOSITE_INTERFACE_COUNT (4)
+#define USB_NCM_COMM_INTERFACE_INDEX (2)
+#define USB_NCM_DATA_INTERFACE_INDEX (3)
+#define USB_NCM_INTERRUPT_IN_ENDPOINT (4)
+#define USB_NCM_BULK_ENDPOINT (5)
+#define FS_NCM_INTERRUPT_IN_PACKET_SIZE (16)
+#define FS_NCM_INTERRUPT_IN_INTERVAL (0x10)
+#define FS_NCM_BULK_PACKET_SIZE (64)
+#define USB_NCM_MAC_STRING_INDEX (3)
+#define USB_CDC_NCM_SUBCLASS (0x0D)
+#define USB_CDC_NCM_DATA_PROTOCOL (0x01)
+#define USB_CDC_NCM_FUNC_DESC (0x1A)
+#define USB_DESCRIPTOR_TYPE_IAD (0x0B)
+#define USB_MS_OS_STRING_INDEX (0xEE)
+#define USB_MS_OS_VENDOR_CODE (0x47)
 
 /* Class code. */
 #define USB_DEVICE_CLASS (0x02)
@@ -198,5 +217,11 @@ usb_status_t USB_DeviceGetStringDescriptor(usb_device_handle handle, usb_device_
  * @return A USB error code or kStatus_USB_Success.
  */
 extern usb_status_t USB_DeviceGetConfigurationDescriptor(usb_device_handle handle, usb_device_get_configuration_descriptor_struct_t *configurationDescriptor);
+
+/* Selects the serial port only device, or the serial port + CDC-NCM network composite device. Call before USB_DeviceClassInit */
+void USB_DeviceDescriptorsSelect(bool composite, const uint8_t hostMac[6]);
+bool USB_DeviceDescriptorsIsComposite(void);
+/* Microsoft OS 1.0 descriptor vendor request (Extended Compat ID), so that Windows 10 binds its NCM driver */
+usb_status_t USB_DeviceMsOsVendorRequest(usb_device_control_request_struct_t *request);
 
 #endif /* _OPENGD77_USB_DEVICE_DESCRIPTOR_H_ */

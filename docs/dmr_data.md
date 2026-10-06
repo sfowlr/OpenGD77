@@ -41,10 +41,50 @@ bytes to the port, 3 unconfirmed packet from the appended bytes with DPF and SAP
 The radio must be on a digital channel that can transmit. The transmission waits for a busy channel to clear,
 exactly like a PTT press.
 
+## USB network adapter (CDC-NCM)
+
+With the `BIT_USB_NETWORK` setting on, the radio enumerates (on the next boot) as a composite device, VID 0x1FC9
+PID 0x0095: the usual serial port (interfaces 0-1, so CPS and MMDVMHost keep working) plus a CDC-NCM network
+adapter (interfaces 2-3). Turn it on or off with USB `D` sub command 8 (`[1]` on, `[0]` off, `[0xFF]` query; the
+reply is the saved mode and whether the network link is up), then save and reboot with the CPS command `C 6 0`.
+
+The radio runs a tiny gateway (`firmware/source/functions/ipGateway.c`, no TCP/IP stack). The address ranges are set
+at compile time in `ipGateway.h` (each a base and a /8 to /24 prefix; the low bits of an address are the DMR ID):
+
+| Range | Default | Use |
+| --- | --- | --- |
+| Individual | 12.0.0.0/8 | DMR IDs. DHCP gives the host its own radio's ID: radio 10005 gives 12.0.39.21 (10.250.39.21 with 10.250.0.0/16) |
+| Group | 13.0.0.0/8 | Send to a talkgroup |
+| Multicast | 225.0.0.0/8 | Send to a talkgroup; group data received over the air arrives here as IP multicast |
+| Link | 12.0.0.0/7 | The host's subnet. It holds the individual range and (by default) the group range too |
+
+- IDs bigger than a range are truncated to its low bits. In a /16, radio 0x010203 gets 10.250.2.3, and its host also
+  gets the data sent over the air to radio 0x0203; sending to 10.250.2.3 reaches radio 0x0203. Overlaps are possible
+  but unlikely, since high IDs are sparse. The radio itself still only acknowledges data to its full ID.
+- Everything to a radio or talkgroup is on the link, so the host needs no routes. Option 121/249 adds only the
+  multicast range (and the group range when it isn't on the link), with no default route, so the host's other traffic
+  is unaffected.
+- The radio itself is the top individual address but one (12.255.255.254). The subnet broadcast (13.255.255.255) is
+  the all call, for UDP ports 4000-4099 only, so that the host's own broadcasts (NetBIOS, discovery, LAN sync) never
+  key the radio. The gateway only sends what has the host's own source address over the air.
+- The lease is 10 minutes. If the radio's DMR ID changes, the renewal is refused and the host gets the new address.
+- Every IP packet received over the air goes to the host, from the source's individual address. Data between two
+  other radios goes to a MAC address the host doesn't have, so the host ignores it but Wireshark (promiscuous) shows
+  it.
+- Every data burst received (CSBKs, headers, blocks, also those with CRC errors) is also sent as a UDP broadcast
+  from the radio to port 40077: version (1), timeslot (1-2), colour code, DT, flags, length, payload.
+- ARP for any address but the host's, and ping of the radio. No fragments, datagrams over ~450 bytes are dropped.
+
+Host drivers: Linux `cdc_ncm`, macOS built in, Windows 11 UsbNcm by class. Windows 10 gets the `WINNCM` compatible
+ID from Microsoft OS 1.0 descriptors (string 0xEE "MSFT100", vendor code 0x47, Extended Compat ID), which binds
+its UsbNcm driver; the serial port binds to the built in usbser driver and gets a new COM port number. The Linux
+udev rules include PID 0x0095 and tell ModemManager to leave the radio alone.
+
 ## Host tests
 
-`make -C firmware/tests` builds the packet layer natively and runs a round trip of every case, then prints the
-bursts and the 33 byte frames so that they can be checked by an independent decoder.
+`make -C firmware/tests` builds the packet layer and the network gateway natively and runs their tests. The packet
+test prints the bursts and the 33 byte frames so that an independent decoder can check them; the gateway test
+writes its frames to a pcap that is checked with tshark (when Wireshark is installed).
 
 ## Not done yet
 

@@ -1,0 +1,93 @@
+/*
+ * Minimal IPv4 gateway between a USB network link and DMR packet data
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
+#ifndef _OPENGD77_IPGATEWAY_H_
+#define _OPENGD77_IPGATEWAY_H_
+
+#include <stdbool.h>
+#include <stdint.h>
+
+// Addressing, chosen at compile time. Each range is a base address and a prefix length of 8 to 24 bits, and maps the
+// low bits of the address to a DMR ID. Bigger IDs are truncated: in a /16 radio 0x010203 is x.y.2.3, and its host also
+// gets the data sent to radio 0x0203. Sending from the host to x.y.2.3 reaches 0x0203 only.
+//   individual   12.0.0.0/8 (default)  DMR IDs. The host gets its own radio's ID by DHCP, so radio 10005 gives it
+//                                      12.0.39.21 (or 10.250.39.21 with 10.250.0.0/16)
+//   group        13.0.0.0/8            send to a talkgroup
+//   multicast    225.0.0.0/8           send to a talkgroup, and group data received over the air arrives here
+//   link         12.0.0.0/7            the subnet the host gets. It must hold the individual range, and if it also holds
+//                                      the group range the host needs no route at all to send to a talkgroup. Option 121
+//                                      adds routes for the multicast range and a group range that isn't on the link.
+// The subnet broadcast address is the all call (16777215), for the DMR application ports 4000-4099 only. The radio
+// itself is the top individual address but one (12.255.255.254), so that DMR ID can't be used.
+#ifndef IPGW_INDIVIDUAL_NET
+#define IPGW_INDIVIDUAL_NET		0x0C000000u		// 12.0.0.0
+#define IPGW_INDIVIDUAL_PREFIX	8
+#endif
+#ifndef IPGW_GROUP_NET
+#define IPGW_GROUP_NET			0x0D000000u		// 13.0.0.0
+#define IPGW_GROUP_PREFIX		8
+#endif
+#ifndef IPGW_MULTICAST_NET
+#define IPGW_MULTICAST_NET		0xE1000000u		// 225.0.0.0
+#define IPGW_MULTICAST_PREFIX	8
+#endif
+#ifndef IPGW_LINK_PREFIX
+#define IPGW_LINK_PREFIX		7
+#endif
+
+#define IPGW_MASK(prefix)		(0xFFFFFFFFu << (32 - (prefix)))
+#define IPGW_NETMASK			IPGW_MASK(IPGW_LINK_PREFIX)
+#define IPGW_GATEWAY_IP			(IPGW_INDIVIDUAL_NET | (~IPGW_MASK(IPGW_INDIVIDUAL_PREFIX) - 1))
+#define IPGW_BROADCAST_IP		((IPGW_INDIVIDUAL_NET & IPGW_NETMASK) | ~IPGW_NETMASK)
+#define IPGW_ALL_CALL_ID		0x00FFFFFFu
+
+_Static_assert((IPGW_INDIVIDUAL_PREFIX >= 8) && (IPGW_INDIVIDUAL_PREFIX <= 24) && (IPGW_GROUP_PREFIX >= 8) && (IPGW_GROUP_PREFIX <= 24) &&
+				(IPGW_MULTICAST_PREFIX >= 8) && (IPGW_MULTICAST_PREFIX <= 24), "address ranges must be /8 to /24");
+_Static_assert((IPGW_LINK_PREFIX >= 1) && (IPGW_LINK_PREFIX <= IPGW_INDIVIDUAL_PREFIX) &&
+				((IPGW_GATEWAY_IP & IPGW_NETMASK) == (IPGW_INDIVIDUAL_NET & IPGW_NETMASK)), "the link must hold the individual range");
+_Static_assert((IPGW_MULTICAST_NET >> 28) == 0xE, "the multicast range must be in 224.0.0.0/4");
+
+// Every data burst received over the air also goes to the host, as a UDP broadcast from the radio to this port:
+// version (1), timeslot (1-2), colour code, DT, flags (dmrBurst_t), length, payload.
+#define IPGW_MONITOR_PORT	40077
+
+#define IPGW_MAX_FRAME		600				// largest Ethernet frame handled, bigger datagrams can't go over the air anyway
+
+// No hardware dependencies, so the gateway can be unit tested on a host (see firmware/tests)
+void ipGatewayInit(const uint8_t gatewayMac[6], const uint8_t hostMac[6]);
+
+// An Ethernet frame from the host
+void ipGatewayEthernetIn(const uint8_t *frame, int length);
+
+// The host's address, from the radio's DMR ID, 0 if the ID can't be used
+uint32_t ipGatewayHostIP(void);
+
+// A UDP datagram received over the air, to the host from the source's individual address. Private data to another radio
+// is sent to a MAC address the host doesn't use, so the host ignores it but a packet capture shows it. Group data goes
+// to the multicast range. False if the USB IN endpoint is busy.
+bool ipGatewayDeliverUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length);
+
+// A monitor record (see IPGW_MONITOR_PORT) to the host
+bool ipGatewayDeliverMonitor(const uint8_t *record, int length);
+
+// Provided by the user of the gateway
+bool ipGatewaySendFrame(const uint8_t *frame, int length);
+uint32_t ipGatewayRadioId(void);
+bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length);
+
+#endif

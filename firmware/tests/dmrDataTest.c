@@ -82,15 +82,13 @@ static void testTMSRoundTrip(bool group, int preambles)
 	CHECK(dmrDataRxPacket.dpf == DMR_DPF_UNCONFIRMED);
 	CHECK(dmrDataRxPacket.sap == DMR_SAP_IP);
 
-	uint16_t port;
-	const uint8_t *payload;
-	int length;
-	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &port, &payload, &length));
-	CHECK(port == DMR_UDP_PORT_TMS);
-	CHECK(length == (int)(6 + (2 * strlen(text))));
+	dmrDataUDP_t udp;
+	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp));
+	CHECK(udp.appPort == DMR_UDP_PORT_TMS);
+	CHECK(udp.length == (int)(6 + (2 * strlen(text))));
 
 	dmrDataTMS_t tms;
-	CHECK(dmrDataDecodeTMS(payload, length, &tms));
+	CHECK(dmrDataDecodeTMS(udp.payload, udp.length, &tms));
 	CHECK(!tms.isAck);
 	CHECK(tms.seqByte == (0x80 | 5));
 	CHECK(strcmp(tms.text, text) == 0);
@@ -141,12 +139,10 @@ static void testTMSAck(void)
 
 	CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
 
-	uint16_t port;
-	const uint8_t *payload;
-	int length;
+	dmrDataUDP_t udp;
 	dmrDataTMS_t tms;
-	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &port, &payload, &length));
-	CHECK(dmrDataDecodeTMS(payload, length, &tms));
+	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp));
+	CHECK(dmrDataDecodeTMS(udp.payload, udp.length, &tms));
 	CHECK(tms.isAck);
 	CHECK(tms.seqByte == 0x85);
 	dumpBursts("tms-ack", bursts, n);
@@ -176,12 +172,10 @@ static void testRadioDeskVectors(void)
 	memcpy(&p.data[sizeof(compressed)], ahoj, sizeof(ahoj));
 	p.length = sizeof(compressed) + sizeof(ahoj);
 
-	uint16_t port;
-	const uint8_t *payload;
-	int length;
-	CHECK(dmrDataGetUDP(&p, &port, &payload, &length));
-	CHECK(port == DMR_UDP_PORT_TMS);
-	CHECK(length == sizeof(ahoj));
+	dmrDataUDP_t udp;
+	CHECK(dmrDataGetUDP(&p, &udp));
+	CHECK(udp.appPort == DMR_UDP_PORT_TMS);
+	CHECK(udp.length == sizeof(ahoj));
 }
 
 static void testCSBK(void)

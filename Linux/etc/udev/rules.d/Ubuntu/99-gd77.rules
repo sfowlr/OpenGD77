@@ -19,3 +19,9 @@ KERNEL=="hiddev*", ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="0073", MODE="0666
 
 # OpenGD77
 KERNEL=="ttyACM[0-9]*", SUBSYSTEM=="tty", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0094", MODE="0666", GROUP="dialout", SYMLINK+="OpenGD77"
+
+# OpenGD77 serial port + USB network (CDC-NCM) composite mode
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0095", MODE="0666", GROUP="plugdev"
+KERNEL=="ttyACM[0-9]*", SUBSYSTEM=="tty", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0095", MODE="0666", GROUP="dialout", SYMLINK+="OpenGD77"
+# The radio is not a modem
+ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0095", ENV{ID_MM_DEVICE_IGNORE}="1"

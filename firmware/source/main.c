@@ -17,6 +17,7 @@
  */
 
 #include "functions/dmrDataService.h"
+#include "usb/usb_ncm.h"
 #include "functions/codeplug.h"
 #include "main.h"
 #include "functions/settings.h"
@@ -1069,6 +1070,7 @@ void mainTask(void *data)
 			soundTickMelody();
 			voxTick();
 			dmrDataServiceTick();
+			usbNcmTick();
 
 #if defined(PLATFORM_RD5R) // Needed for platforms which can't control the poweroff
 			settingsSaveIfNeeded(false);

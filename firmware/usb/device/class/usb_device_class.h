@@ -33,6 +33,7 @@ typedef enum _usb_usb_device_class_type
     kUSB_DeviceClassTypePrinter,
     kUSB_DeviceClassTypeDfu,
     kUSB_DeviceClassTypeCcid,
+    kUSB_DeviceClassTypeCdcNcm, /* OpenGD77: CDC-NCM network function, see source/usb/usb_ncm.c */
 } usb_device_class_type_t;
 
 /*! @brief Available common class events. */

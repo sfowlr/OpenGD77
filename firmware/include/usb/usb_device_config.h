@@ -77,8 +77,11 @@
 /*! @brief Whether device is self power. 1U supported, 0U not supported */
 #define USB_DEVICE_CONFIG_SELF_POWER (1U)
 
-/*! @brief How many endpoints are supported in the stack. */
-#define USB_DEVICE_CONFIG_ENDPOINTS (4U)
+/*! @brief CDC-NCM network function (OpenGD77, source/usb/usb_ncm.c) */
+#define USB_DEVICE_CONFIG_CDC_NCM (1U)
+
+/*! @brief How many endpoints are supported in the stack. EP0, the serial port EP1-3 and the network EP4-5 */
+#define USB_DEVICE_CONFIG_ENDPOINTS (6U)
 
 /*! @brief Whether the device task is enabled. */
 #define USB_DEVICE_CONFIG_USE_TASK (0U)

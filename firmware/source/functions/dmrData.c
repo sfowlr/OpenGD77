@@ -184,7 +184,7 @@ static uint16_t onesComplementSum(uint32_t sum, const uint8_t *data, int length)
 	return sum;
 }
 
-int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t port,
+int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
 						const uint8_t *payload, int length, int preambles, dmrBurst_t *out, int maxBursts)
 {
 	static uint8_t ip[DMR_DATA_MAX_PACKET];
@@ -207,8 +207,8 @@ int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t port,
 	putId(&ip[17], dst);
 	putU16(&ip[10], ~onesComplementSum(0, ip, 20));
 
-	putU16(&ip[20], port);
-	putU16(&ip[22], port);
+	putU16(&ip[20], srcPort);
+	putU16(&ip[22], dstPort);
 	putU16(&ip[24], 8 + length);
 	memcpy(&ip[28], payload, length);
 
@@ -246,7 +246,7 @@ int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, ui
 		tms[7 + (2 * i)] = 0x00;
 	}
 
-	return dmrDataBuildUDP(group, dst, src, DMR_UDP_PORT_TMS, tms, length, preambles, out, maxBursts);
+	return dmrDataBuildUDP(group, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, tms, length, preambles, out, maxBursts);
 }
 
 // Figure 8.5 response header: class 0, type 1 (ACK), status = N(S) of the packet being acknowledged
@@ -270,7 +270,7 @@ int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *
 {
 	uint8_t ack[5] = { 0x00, 0x03, 0xBF, 0x00, seqByte };
 
-	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, ack, sizeof(ack), 0, out, maxBursts);
+	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, ack, sizeof(ack), 0, out, maxBursts);
 }
 
 void dmrDataRxReset(void)
@@ -436,8 +436,13 @@ static uint16_t compressedPort(uint8_t portId, const uint8_t **ptr)
 	}
 }
 
-// Returns the destination port (or the source port when the destination is not a well known one) and the UDP payload
-bool dmrDataGetUDP(const dmrDataPacket_t *packet, uint16_t *port, const uint8_t **payload, int *length)
+static bool isWellKnownPort(uint16_t port)
+{
+	return (port == DMR_UDP_PORT_LRRP) || (port == DMR_UDP_PORT_ARS) || (port == DMR_UDP_PORT_TMS);
+}
+
+// UDP datagram of an IP based (SAP 4) or compressed UDP/IP (SAP 3) packet
+bool dmrDataGetUDP(const dmrDataPacket_t *packet, dmrDataUDP_t *udp)
 {
 	const uint8_t *d = packet->data;
 	int len = packet->length;
@@ -451,21 +456,18 @@ bool dmrDataGetUDP(const dmrDataPacket_t *packet, uint16_t *port, const uint8_t 
 			return false;
 		}
 
-		uint16_t srcPort = (d[ihl] << 8) | d[ihl + 1];
-		uint16_t dstPort = (d[ihl + 2] << 8) | d[ihl + 3];
 		int udpLen = (d[ihl + 4] << 8) | d[ihl + 5];
 
-		*port = ((dstPort == DMR_UDP_PORT_LRRP) || (dstPort == DMR_UDP_PORT_ARS) || (dstPort == DMR_UDP_PORT_TMS)) ? dstPort : srcPort;
-		*payload = &d[ihl + 8];
-		*length = len - ihl - 8;
-		if ((udpLen >= 8) && ((udpLen - 8) < *length))
+		udp->srcPort = (d[ihl] << 8) | d[ihl + 1];
+		udp->dstPort = (d[ihl + 2] << 8) | d[ihl + 3];
+		udp->payload = &d[ihl + 8];
+		udp->length = len - ihl - 8;
+		if ((udpLen >= 8) && ((udpLen - 8) < udp->length))
 		{
-			*length = udpLen - 8;
+			udp->length = udpLen - 8;
 		}
-		return true;
 	}
-
-	if (packet->sap == 0x03)// UDP/IP header compression
+	else if (packet->sap == 0x03)// UDP/IP header compression
 	{
 		if (len < 5)
 		{
@@ -473,16 +475,22 @@ bool dmrDataGetUDP(const dmrDataPacket_t *packet, uint16_t *port, const uint8_t 
 		}
 
 		const uint8_t *ptr = &d[5];
-		uint16_t srcPort = compressedPort(d[3] & 0x7F, &ptr);
-		uint16_t dstPort = compressedPort(d[4] & 0x7F, &ptr);
-
-		*port = (dstPort & 0x8000) ? srcPort : dstPort;
-		*payload = ptr;
-		*length = len - (ptr - d);
-		return (*length >= 0);
+		udp->srcPort = compressedPort(d[3] & 0x7F, &ptr);
+		udp->dstPort = compressedPort(d[4] & 0x7F, &ptr);
+		udp->payload = ptr;
+		udp->length = len - (ptr - d);
+		if (udp->length < 0)
+		{
+			return false;
+		}
+	}
+	else
+	{
+		return false;
 	}
 
-	return false;
+	udp->appPort = (!isWellKnownPort(udp->dstPort) && isWellKnownPort(udp->srcPort)) ? udp->srcPort : udp->dstPort;
+	return true;
 }
 
 bool dmrDataDecodeTMS(const uint8_t *payload, int length, dmrDataTMS_t *tms)

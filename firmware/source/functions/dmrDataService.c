@@ -26,6 +26,8 @@
 #include "functions/rxPowerSaving.h"
 #include "user_interface/uiGlobals.h"
 #include "usb/usb_com.h"
+#include "usb/usb_ncm.h"
+#include "functions/ipGateway.h"
 
 #define RX_BURST_QUEUE_SIZE		8
 #define USB_BUFFER_SIZE			300
@@ -40,7 +42,8 @@ enum
 	USB_DATA_SEND,					// [kind][flags][dst 3][port or dpf/sap 2]
 	USB_DATA_STATUS,				// -> [tx status][rx bursts][inbox count]
 	USB_DATA_POP_BURST,				// -> [1][dataType][flags][len][payload] or [0]
-	USB_DATA_POP_MESSAGE			// -> [1][src 3][dst 3][group][len][text] or [0]
+	USB_DATA_POP_MESSAGE,			// -> [1][src 3][dst 3][group][len][text] or [0]
+	USB_DATA_NETWORK_MODE			// [0 off / 1 on / 0xFF query] -> [result][mode saved for the next boot][network link up]
 };
 
 enum { USB_SEND_BURSTS = 0, USB_SEND_TMS, USB_SEND_UDP, USB_SEND_PACKET };
@@ -71,6 +74,25 @@ static volatile uint8_t inboxReadIdx = 0;
 static dmrBurst_t rxBursts[RX_BURST_QUEUE_SIZE];
 static volatile uint8_t rxBurstWriteIdx = 0;
 static volatile uint8_t rxBurstReadIdx = 0;
+
+// A UDP datagram received over the air, waiting for the main task to give it to the USB network gateway
+static struct
+{
+	volatile bool pending;
+	bool group;
+	uint32_t dst;
+	uint32_t src;
+	uint16_t srcPort;
+	uint16_t dstPort;
+	int length;
+	uint8_t payload[DMR_DATA_MAX_PACKET];
+} airToHost;
+
+// Every data burst received, for the USB network host (see IPGW_MONITOR_PORT)
+#define MONITOR_RECORD_HEADER	6
+static uint8_t monitorRecords[RX_BURST_QUEUE_SIZE][MONITOR_RECORD_HEADER + DMR_BURST_PAYLOAD_MAX];
+static volatile uint8_t monitorWriteIdx = 0;
+static volatile uint8_t monitorReadIdx = 0;
 
 static uint8_t usbBuffer[USB_BUFFER_SIZE];
 static int usbBufferLength = 0;
@@ -111,14 +133,14 @@ bool dmrDataServiceSendSMS(bool group, uint32_t dst, const char *text, bool ackR
 	return queueTx(dmrDataBuildTMS(group, dst, trxDMRID, text, smsSeq, ackRequested, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
 }
 
-bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t port, const uint8_t *payload, int length)
+bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
 {
 	if (dmrDataServiceIsBusy() || !canTransmit())
 	{
 		return false;
 	}
 
-	return queueTx(dmrDataBuildUDP(group, dst, trxDMRID, port, payload, length, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+	return queueTx(dmrDataBuildUDP(group, dst, trxDMRID, srcPort, dstPort, payload, length, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
 }
 
 bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count)
@@ -169,6 +191,38 @@ void dmrDataServiceTick(void)
 		newMessage = false;
 		soundSetMelody(MELODY_PRIVATE_CALL);
 	}
+
+	while (monitorReadIdx != monitorWriteIdx)
+	{
+		uint8_t *record = monitorRecords[monitorReadIdx];
+
+		if (usbNcmIsUp() && !ipGatewayDeliverMonitor(record, MONITOR_RECORD_HEADER + record[5]))
+		{
+			break;// USB IN busy, next tick
+		}
+		monitorReadIdx = (monitorReadIdx + 1) % RX_BURST_QUEUE_SIZE;
+	}
+
+	if (airToHost.pending)
+	{
+		// Retried on the next tick if the USB IN endpoint is still busy, dropped if the link went down
+		if (!usbNcmIsUp() || ipGatewayDeliverUDP(airToHost.group, airToHost.dst, airToHost.src, airToHost.srcPort,
+													airToHost.dstPort, airToHost.payload, airToHost.length))
+		{
+			airToHost.pending = false;
+		}
+	}
+}
+
+uint32_t ipGatewayRadioId(void)
+{
+	return trxDMRID;
+}
+
+// USB network gateway: a datagram from the host to a radio ID or talkgroup
+bool ipGatewayToAir(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+{
+	return dmrDataServiceSendUDP(group, dst, srcPort, dstPort, payload, length);
 }
 
 static bool isForUs(const dmrDataPacket_t *packet)
@@ -201,10 +255,22 @@ static bool isForUs(const dmrDataPacket_t *packet)
 
 static void handlePacket(const dmrDataPacket_t *packet)
 {
-	uint16_t port;
-	const uint8_t *payload;
-	int length;
+	dmrDataUDP_t udp;
 	dmrDataTMS_t tms;
+	bool isUDP = dmrDataGetUDP(packet, &udp);
+
+	// Everything IP based goes to the USB network host, also between other radios so that a capture shows it
+	if (isUDP && (packet->src != trxDMRID) && usbNcmIsUp() && !airToHost.pending && (udp.length <= (int)sizeof(airToHost.payload)))
+	{
+		airToHost.group = packet->group;
+		airToHost.dst = packet->dst;
+		airToHost.src = packet->src;
+		airToHost.srcPort = udp.srcPort;
+		airToHost.dstPort = udp.dstPort;
+		airToHost.length = udp.length;
+		memcpy(airToHost.payload, udp.payload, udp.length);
+		airToHost.pending = true;
+	}
 
 	if (!isForUs(packet))
 	{
@@ -218,8 +284,7 @@ static void handlePacket(const dmrDataPacket_t *packet)
 	ackSap = packet->sap;
 	ackSendSeq = packet->sendSeq;
 
-	bool isTMS = dmrDataGetUDP(packet, &port, &payload, &length) && (port == DMR_UDP_PORT_TMS) &&
-			dmrDataDecodeTMS(payload, length, &tms) && !tms.isAck;
+	bool isTMS = isUDP && (udp.appPort == DMR_UDP_PORT_TMS) && dmrDataDecodeTMS(udp.payload, udp.length, &tms) && !tms.isAck;
 
 	if (isTMS && tms.ackRequested && !packet->group)
 	{
@@ -263,6 +328,21 @@ void dmrDataServiceRxBurst(const dmrBurst_t *burst)
 	}
 	rxBursts[rxBurstWriteIdx] = *burst;
 	rxBurstWriteIdx = next;
+
+	next = (monitorWriteIdx + 1) % RX_BURST_QUEUE_SIZE;
+	if (usbNcmIsUp() && (next != monitorReadIdx))
+	{
+		uint8_t *record = monitorRecords[monitorWriteIdx];
+
+		record[0] = 1;// version
+		record[1] = trxGetDMRTimeSlot() + 1;
+		record[2] = trxGetDMRColourCode();
+		record[3] = burst->dataType;
+		record[4] = burst->flags;
+		record[5] = burst->length;
+		memcpy(&record[MONITOR_RECORD_HEADER], burst->payload, burst->length);
+		monitorWriteIdx = next;
+	}
 
 	// In hotspot mode MMDVMHost gets the bursts (see hotspotDataTick), the radio itself is not the recipient
 	if ((settingsUsbMode != USB_MODE_HOTSPOT) && (dmrDataRxBurst(burst) == DMR_DATA_RX_PACKET))
@@ -319,7 +399,7 @@ static bool usbSend(const uint8_t *r)
 			usbBuffer[(usbBufferLength < USB_BUFFER_SIZE) ? usbBufferLength : (USB_BUFFER_SIZE - 1)] = 0;
 			return dmrDataServiceSendSMS(group, dst, (const char *)usbBuffer, (r[1] & USB_SEND_FLAG_ACK) != 0);
 		case USB_SEND_UDP:
-			return dmrDataServiceSendUDP(group, dst, port, usbBuffer, usbBufferLength);
+			return dmrDataServiceSendUDP(group, dst, port, port, usbBuffer, usbBufferLength);
 		case USB_SEND_PACKET:
 			if (dmrDataServiceIsBusy() || !canTransmit())
 			{
@@ -418,6 +498,17 @@ int dmrDataServiceHandleUSB(const uint8_t *request, uint8_t *reply)
 					len = 11 + textLen;
 				}
 			}
+			break;
+
+		case USB_DATA_NETWORK_MODE:
+			if (args[0] != 0xFF)
+			{
+				settingsSetOptionBit(BIT_USB_NETWORK, (args[0] != 0));
+				settingsSetDirty();// saved with the other settings, e.g. by the CPS save and reboot command
+			}
+			reply[3] = settingsIsOptionBitSet(BIT_USB_NETWORK) ? 1 : 0;
+			reply[4] = usbNcmIsUp() ? 1 : 0;
+			len = 5;
 			break;
 
 		default:

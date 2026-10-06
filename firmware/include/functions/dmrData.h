@@ -93,7 +93,7 @@ uint32_t dmrDataCRC32(const uint8_t *data, int length);
 int dmrDataBuildCSBK(const uint8_t csbk[10], dmrBurst_t *out);
 int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint32_t src,
 						const uint8_t *data, int length, int preambles, dmrBurst_t *out, int maxBursts);
-int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t port,
+int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
 						const uint8_t *payload, int length, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
 						int preambles, dmrBurst_t *out, int maxBursts);
@@ -103,7 +103,16 @@ int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *
 // RX
 void dmrDataRxReset(void);
 dmrDataRxResult_t dmrDataRxBurst(const dmrBurst_t *burst);
-bool dmrDataGetUDP(const dmrDataPacket_t *packet, uint16_t *port, const uint8_t **payload, int *length);
+typedef struct
+{
+	uint16_t srcPort;
+	uint16_t dstPort;
+	uint16_t appPort;					// the well known one of the two (LRRP, ARS, TMS), else the destination port
+	const uint8_t *payload;
+	int length;
+} dmrDataUDP_t;
+
+bool dmrDataGetUDP(const dmrDataPacket_t *packet, dmrDataUDP_t *udp);
 
 // Decoded TMS text message, text is converted from UTF-16LE to Latin-1 ('?' for anything else)
 typedef struct
