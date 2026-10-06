@@ -148,6 +148,9 @@ static const uint8_t MMDVM_VOICE_SYNC_PATTERN = 0x20U;
 
 static const int EMBEDDED_DATA_OFFSET = 13U;
 static const int TX_BUFFER_MIN_BEFORE_TRANSMISSION = 4;
+static const uint32_t NET_VOICE_TIMEOUT_MS = 360;// an empty buffer ends a call without a terminator after this
+static bool netTerminatorReceived = false;// the host has sent the terminator of the call being transmitted
+static uint32_t netVoiceLastMs = 0;
 
 static const uint8_t START_FRAME_PATTERN[]  = { 0xFF,0x57,0xD7,0x5D,0xF5,0xD9 };
 static const uint8_t END_FRAME_PATTERN[]    = { 0x5D,0x7F,0x77,0xFD,0x75,0x79 };
@@ -384,6 +387,7 @@ menuStatus_t menuHotspotMode(uiEvent_t *ev, bool isFirstRun)
 		cwKeying = false;
 		cwReset();
 		hotspotDataReset(netDataBursts);
+		netTerminatorReceived = false;
 
 		memset(&rxedDMR_LC, 0, sizeof(DMRLC_T));// clear automatic variable
 
@@ -1181,6 +1185,7 @@ static void storeNetFrame(volatile const uint8_t *com_requestbuffer)
 	{
 		timeoutCounter = TX_BUFFERING_TIMEOUT;// set buffering timeout
 		hotspotState = HOTSPOT_STATE_TX_START_BUFFERING;
+		netTerminatorReceived = false;// a call without a header (late entry)
 	}
 
 	if (hotspotState == HOTSPOT_STATE_TRANSMITTING ||
@@ -1201,6 +1206,7 @@ static void storeNetFrame(volatile const uint8_t *com_requestbuffer)
 		wavbuffer_count++;
 		wavbuffer_write_idx = ((wavbuffer_write_idx + 1) % HOTSPOT_BUFFER_COUNT);
 		taskEXIT_CRITICAL();
+		netVoiceLastMs = fw_millis();
 	}
 
 }
@@ -1266,10 +1272,19 @@ static uint8_t hotspotModeReceiveNetFrame(volatile const uint8_t *com_requestbuf
 	{
 		uint8_t dataType = com_requestbuffer[3] & DT_MASK;
 
-		if ((dataType != DT_VOICE_LC_HEADER) && (dataType != DT_TERMINATOR_WITH_LC))
+		if (dataType == DT_TERMINATOR_WITH_LC)
+		{
+			// The end of the call: what is buffered goes out, then the radio's own terminator
+			netTerminatorReceived = true;
+			return 0U;
+		}
+
+		if (dataType != DT_VOICE_LC_HEADER)
 		{
 			return hotspotDataQueue(dataType, (const uint8_t *)com_requestbuffer + MMDVM_HEADER_LENGTH, fw_millis());// 0 or a NAK reason
 		}
+
+		netTerminatorReceived = false;// a new call
 	}
 
 	lc.srcId = 0;// zero these values as they are checked later in the function, but only updated if the data type is DT_VOICE_LC_HEADER
@@ -1711,7 +1726,8 @@ static void hotspotStateMachine(void)
 			}
 			else
 			{
-				if (wavbuffer_count > TX_BUFFER_MIN_BEFORE_TRANSMISSION)
+				// A short call ends with its terminator before the buffer reaches the minimum
+				if ((wavbuffer_count > TX_BUFFER_MIN_BEFORE_TRANSMISSION) || (netTerminatorReceived && (wavbuffer_count > 0)))
 				{
 					if (cwKeying == false)
 					{
@@ -1732,10 +1748,13 @@ static void hotspotStateMachine(void)
 			break;
 
 		case HOTSPOT_STATE_TRANSMITTING:
-			// Stop transmitting when there is no data in the buffer or if MMDVMHost sends the idle command
-			if (wavbuffer_count == 0 || modemState == STATE_IDLE)
+			// Stop transmitting when the buffer is empty after the host's terminator, or for NET_VOICE_TIMEOUT_MS without
+			// one (so that network jitter doesn't cut the call), or if MMDVMHost sends the idle command
+			if (((wavbuffer_count == 0) && (netTerminatorReceived || ((fw_millis() - netVoiceLastMs) > NET_VOICE_TIMEOUT_MS))) ||
+					(modemState == STATE_IDLE))
 			{
 				hotspotState = HOTSPOT_STATE_TX_SHUTDOWN;
+				netTerminatorReceived = false;
 				//trxTransmissionEnabled = false;
 			}
 			break;

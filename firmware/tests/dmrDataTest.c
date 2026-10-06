@@ -259,6 +259,71 @@ static void testFrames(void)
 	}
 }
 
+// Rate 3/4 (Trellis) and Rate 1 frames: round trips, the Trellis code corrects errors, and the frames are printed
+// ("C dt payload frame") for an independent decoder
+static void testCodedFrames(void)
+{
+	uint32_t seed = 12345;
+	int pairsCorrected = 0;
+
+	printf("# coded frames cc=2\n");
+	for (int n = 0; n < 40; n++)
+	{
+		dmrBurst_t burst = { .dataType = (n & 1) ? DT_RATE_1_DATA : DT_RATE_34_DATA, .flags = DMR_BURST_FLAG_MCU_CRC };
+		dmrBurst_t back;
+		uint8_t frame[33];
+
+		burst.length = (burst.dataType == DT_RATE_1_DATA) ? 24 : 18;
+		for (int i = 0; i < burst.length; i++)
+		{
+			seed = (seed * 1103515245u) + 12345u;
+			burst.payload[i] = (n == 0) ? 0 : ((n == 2) ? 0xFF : (seed >> 16));
+		}
+
+		CHECK(dmrDataBurstToFrame(&burst, 2, frame));
+		CHECK(dmrDataFrameToBurst(burst.dataType, frame, &back));
+		CHECK(back.length == burst.length && memcmp(back.payload, burst.payload, burst.length) == 0);
+
+		printf("C %d ", burst.dataType);
+		for (int i = 0; i < burst.length; i++)
+		{
+			printf("%02x", burst.payload[i]);
+		}
+		printf(" ");
+		for (int i = 0; i < 33; i++)
+		{
+			printf("%02x", frame[i]);
+		}
+		printf("\n");
+
+		if (burst.dataType == DT_RATE_34_DATA)
+		{
+			// Any one bit error in the info bits is corrected. Of two, hard decision decoding corrects most (RadioDesk's
+			// decoder corrects exactly the same pairs: 421 of these 560)
+			for (int e = 0; e < 196; e += 7)
+			{
+				uint8_t bad[33];
+				int p1 = (e < 98) ? e : (e + 68);
+				int p2 = ((e + 101) % 196 < 98) ? ((e + 101) % 196) : (((e + 101) % 196) + 68);
+
+				memcpy(bad, frame, 33);
+				bad[p1 >> 3] ^= 0x80 >> (p1 & 7);
+				CHECK(dmrDataFrameToBurst(DT_RATE_34_DATA, bad, &back) && memcmp(back.payload, burst.payload, 18) == 0);
+				bad[p2 >> 3] ^= 0x80 >> (p2 & 7);
+				dmrDataFrameToBurst(DT_RATE_34_DATA, bad, &back);
+				pairsCorrected += (memcmp(back.payload, burst.payload, 18) == 0);
+			}
+		}
+	}
+
+	printf("# Trellis: %d of 560 two bit errors corrected\n", pairsCorrected);
+	CHECK(pairsCorrected == 421);
+
+	dmrBurst_t wrong = { .dataType = DT_RATE_34_DATA, .length = 12 };
+	uint8_t frame[33];
+	CHECK(!dmrDataBurstToFrame(&wrong, 2, frame));
+}
+
 int main(void)
 {
 	testCRC32();
@@ -270,6 +335,7 @@ int main(void)
 	testCSBK();
 	testConfirmedRx();
 	testFrames();
+	testCodedFrames();
 
 	printf("# %s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 	return failures ? 1 : 0;

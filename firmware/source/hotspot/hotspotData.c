@@ -1,8 +1,8 @@
 /*
  * Hotspot packet data from the host: MMDVM data frames collected into burst lists for the radio's data TX
  *
- * CSBKs, MBC, data headers and Rate 1/2 blocks are sent with their 96 info bits unchanged (taken from the frame by
- * BPTC decoding, so the host's CRCs are kept).
+ * CSBKs, MBC, data headers and Rate 1/2, Rate 3/4 and Rate 1 blocks are sent with their info bits unchanged (taken
+ * from the frame by BPTC, Trellis or Rate 1 decoding, so the host's CRCs are kept).
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,9 +64,9 @@ static int headerBlocks(const uint8_t *h)
 
 uint8_t hotspotDataQueue(uint8_t dataType, const uint8_t *frame, uint32_t nowMs)
 {
-	if ((dataType < DT_CSBK) || (dataType > DT_RATE_12_DATA))
+	if ((dataType < DT_CSBK) || (dataType > DT_RATE_1_DATA) || (dataType == DT_IDLE))
 	{
-		return HOTSPOT_DATA_NAK_UNSUPPORTED;// PI header, Idle, USBD; Rate 3/4 needs Trellis coding, Rate 1 a raw extraction
+		return HOTSPOT_DATA_NAK_UNSUPPORTED;// PI header, Idle, USBD
 	}
 
 	if ((onAir + list.count) >= DMR_DATA_MAX_BURSTS)

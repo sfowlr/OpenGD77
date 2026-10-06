@@ -28,16 +28,16 @@ this way, not only the ones the firmware builds itself, and bad CRCs go out as g
 
 | Burst (DT) | TX, normal mode (`D` commands, network adapter) | RX, normal mode | Hotspot, MMDVMHost → RF | Hotspot, RF → MMDVMHost |
 | --- | --- | --- | --- | --- |
-| PI header (0) | - | - | acknowledged, not sent | - |
+| PI header (0) | - | - | refused (NAK 4) | - |
 | Voice LC header, terminator (1, 2) | voice path | voice path | voice path | voice path |
 | CSBK (3), any opcode / FID | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | MBC header, continuation (4, 5) | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | Data header (6), any DPF | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | Rate 1/2 block (7) | yes | yes, also with a CRC error | yes | yes, also with a CRC error |
-| Rate 3/4 block (8), 18 bytes | raw `D` bursts only, untested | yes, also with a CRC error (the HR-C6000 decodes the Trellis code) | refused (needs Trellis coding) | not passed up yet |
-| Idle (9) | - | - | acknowledged, not sent | - |
-| Rate 1 block (10), 24 bytes | raw `D` bursts only, untested | yes, also with a CRC error | refused | not passed up yet |
-| USBD (11) | - | - | acknowledged, not sent | - |
+| Rate 3/4 block (8), 18 bytes | raw `D` bursts only, untested | yes, also with a CRC error (the HR-C6000 decodes the Trellis code) | yes (Trellis decoded, untested on air) | yes (Trellis coded), also with a CRC error |
+| Idle (9) | - | - | refused (NAK 4) | - |
+| Rate 1 block (10), 24 bytes | raw `D` bursts only, untested | yes, also with a CRC error | yes (untested on air) | yes, also with a CRC error |
+| USBD (11) | - | - | refused (NAK 4) | - |
 
 - A transmission is at most 40 bursts (`DMR_DATA_MAX_BURSTS`), one per slot on the channel's timeslot. It waits for a
   busy channel to clear, exactly like a PTT press, and needs a digital channel that can transmit.
@@ -102,13 +102,20 @@ switch from the menu.
 Over the serial port, or on the STM32 radios over UDP port 3334 on the network adapter (MMDVMHost `Protocol=udp`). The hotspot is simplex
 (DMO) and uses `DMR_DATA2` frames both ways.
 
-- Voice passes as before.
+- Voice: the host's terminator ends the transmission once the buffered voice is out (then the radio sends its own
+  terminator); without one, 360 ms without voice ends it. A call shorter than the buffering minimum starts on its
+  terminator. On the STM32 radios voice starts straight after the three LC headers (no startup silence).
 - Data: MMDVMHost frames with data sync and the types marked "yes" in the burst table go out on RF bit for bit (the
-  96 info bits are taken from the 33 byte frame by BPTC decoding, so the frame's CRCs are kept). Bursts are collected
-  into one transmission, which starts when the count announced by a preamble CSBK or data header is reached, or 180 ms
-  after the last frame.
+  info bits are taken from the 33 byte frame by BPTC, Trellis or Rate 1 decoding, so the frame's CRCs are kept).
+  Bursts are collected into a list (`hotspotData.c`). A list goes out when it holds as many bursts as its data header
+  announced (else its preamble CSBKs or MBC), or 180 ms after its last frame, and only from idle receive. While one is
+  on air the next one fills the rest of the 40 burst array. Types the radio can't send, and frames that don't fit,
+  are NAKed (4 and 5) instead of being acknowledged and dropped.
 - Data bursts received on RF go to MMDVMHost as 33 byte `DMR_DATA2` frames with the radio's colour code and RSSI:
-  CSBK, MBC, data headers (with a good CRC) and Rate 1/2 blocks (also with a CRC error).
+  CSBK, MBC, data headers (with a good CRC) and Rate 1/2, Rate 3/4 and Rate 1 blocks (also with a CRC error).
+- GET_STATUS: transmitting (0x01) from buffering until the radio's last burst is on air, and while data is queued or
+  on air; carrier detect (0x40) from the receiver's noise level, as for the squelch (so analog signals and other
+  colour codes count), while not transmitting; the DMR space is the smaller of the voice buffer and the data list.
 - `D` commands and the network adapter's own data path don't run in hotspot mode.
 
 ## USB network adapter (CDC-NCM)
@@ -197,14 +204,16 @@ The CPS needs the serial port (on the STM32 radios, serial mode).
 
 ## Host tests
 
-`make -C firmware/tests` builds the packet layer and the network gateway natively and runs their tests. The packet
-test prints the bursts and the 33 byte frames so that an independent decoder can check them. The gateway test runs
+`make -C firmware/tests` builds the packet layer, the hotspot data lists and the network gateway natively and runs
+their tests. The packet test prints the bursts and the 33 byte frames (also Rate 3/4 and Rate 1) so that an independent
+decoder can check them; RadioDesk's decoder agrees on every frame and corrects exactly the same two bit errors as the
+Trellis decoder (421 of 560, hard decision; all single bit errors). The gateway test runs
 with the default ranges (/32 link), with a /31 link, with a shared /8 link and with a /16 plan, and writes its frames
 to pcaps that are checked with tshark (when Wireshark is installed).
 
 ## Not done yet
 
-- Rate 3/4 (Trellis) and Rate 1 blocks in hotspot passthrough, both ways (RX on the radio itself handles them).
+- Rate 3/4 and Rate 1 built by the radio itself (`D` send kinds 1-3 and the network adapter use Rate 1/2).
 - Confirmed data on TX (retries and selective ACKs). Confirmed data on RX is acknowledged.
 - SMS compose / inbox screens, storing messages in flash.
 - ETSI defined short data and Hytera text formats.

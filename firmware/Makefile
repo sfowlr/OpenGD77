@@ -264,7 +264,14 @@ $(BUILD_DIR)/%.o: %.S
 	$(ECHO) "[AS ] $<"
 	$(Q)$(CC) $(DFLAGS) $(CFLAGS) $< -o $@
 
-.PHONY: clean
+# The files that show GITVERSION are rebuilt when it changes
+$(BUILD_DIR)/gitversion: FORCE
+	$(Q)$(MKDIR_P) $(dir $@)
+	$(Q)git rev-parse --short HEAD | cmp -s - $@ || git rev-parse --short HEAD > $@
+
+$(filter %/hotspot/uiHotspot.o %/user_interface/menuFirmwareInfoScreen.o,$(OBJ)): $(BUILD_DIR)/gitversion
+
+.PHONY: clean FORCE
 
 clean:
 	$(Q)$(RM) -rf $(BUILD_DIR) firmware.map && find . -type f -name "*.o" -exec rm {} + -o -name "*.d" -exec rm {} +

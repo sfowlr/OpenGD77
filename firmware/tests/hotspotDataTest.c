@@ -162,8 +162,6 @@ static void testRefused(void)
 	dmrBurst_t lone = preamble(0);
 
 	reset();
-	CHECK(hotspotDataQueue(DT_RATE_34_DATA, frame, 0) == HOTSPOT_DATA_NAK_UNSUPPORTED);
-	CHECK(hotspotDataQueue(DT_RATE_1_DATA, frame, 0) == HOTSPOT_DATA_NAK_UNSUPPORTED);
 	CHECK(hotspotDataQueue(DT_VOICE_PI_HEADER, frame, 0) == HOTSPOT_DATA_NAK_UNSUPPORTED);
 	CHECK(hotspotDataQueue(DT_IDLE, frame, 0) == HOTSPOT_DATA_NAK_UNSUPPORTED);
 	CHECK(hotspotDataQueue(0x0B, frame, 0) == HOTSPOT_DATA_NAK_UNSUPPORTED);// USBD
@@ -175,6 +173,20 @@ static void testRefused(void)
 	}
 	CHECK(hotspotDataSpace() == 0);
 	CHECK(queue(&lone, 0) == HOTSPOT_DATA_NAK_FULL);
+}
+
+// Rate 3/4 and Rate 1 blocks are taken, with their 18 and 24 bytes
+static void testCodedBlocks(void)
+{
+	dmrBurst_t r34 = { .dataType = DT_RATE_34_DATA, .length = 18 }, r1 = { .dataType = DT_RATE_1_DATA, .length = 24 };
+
+	reset();
+	memset(r34.payload, 0x3C, 18);
+	memset(r1.payload, 0xA5, 24);
+	CHECK(queue(&r34, 0) == 0);
+	CHECK(queue(&r1, 0) == 0);
+	CHECK(storage[0].length == 18 && memcmp(storage[0].payload, r34.payload, 18) == 0);
+	CHECK(storage[1].length == 24 && memcmp(storage[1].payload, r1.payload, 24) == 0);
 }
 
 // The channel never frees up: the list is dropped after HOTSPOT_DATA_GIVE_UP_MS
@@ -218,6 +230,7 @@ int main(void)
 	testGap();
 	testSecondList();
 	testRefused();
+	testCodedBlocks();
 	testGiveUp();
 	testProprietaryHeader();
 
