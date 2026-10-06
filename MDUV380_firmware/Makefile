@@ -67,6 +67,13 @@ $(BUILD)/%.o: %.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
+# The files that show GITVERSION are rebuilt when it changes
+$(BUILD)/gitversion: FORCE
+	@mkdir -p $(dir $@)
+	@echo $(GITVERSION) | cmp -s - $@ || echo $(GITVERSION) > $@
+
+$(addprefix $(BUILD)/application/source/,usb/usb_com.o user_interface/menuFirmwareInfoScreen.o functions/hotspot.o): $(BUILD)/gitversion
+
 # As in the CubeIDE project: the codec calls are inline assembly that relies on the unoptimised stack frame
 $(BUILD)/application/source/dmr_codec/codec_interface.o: CFLAGS += -O0
 
@@ -87,6 +94,6 @@ $(BUILD)/firmware.bin: $(BUILD)/firmware.elf
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean
+.PHONY: all clean FORCE
 
 -include $(OBJS:.o=.d)
