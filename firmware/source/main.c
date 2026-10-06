@@ -31,6 +31,8 @@
 #include "main.h"
 #include "functions/settings.h"
 #include "functions/ticks.h"
+#include "functions/dmrDataService.h"
+#include "usb/usb_ncm.h"
 #include "user_interface/menuSystem.h"
 #include "user_interface/uiUtilities.h"
 #include "user_interface/uiLocalisation.h"
@@ -1278,6 +1280,8 @@ void mainTaskFunction(void *data)
 			batteryUpdate();
 
 			tick_com_request();
+			dmrDataServiceTick();
+			usbNcmTick();
 
 			handleTimerCallbacks();
 

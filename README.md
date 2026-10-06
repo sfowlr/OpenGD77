@@ -11,6 +11,32 @@ The firmware source code does not contain a AMBE codec required for DMR operatio
 This functionality is provided by the official firmware which is merged with the OpenGD77 by the firmware loader
 
 
+# Branches in this fork
+This fork (sfowlr/OpenGD77) holds the OpenGD77 firmware for both MCU families. The OpenGD77 developers release the
+current source only as zip files on opengd77.com; each release is imported unchanged, and the work goes on top.
+
+| Branch | Contents |
+| --- | --- |
+| `main` | open-ham/OpenGD77 unchanged: the 2022 MK22 code (GD-77, GD-77S, DM-1801, RD-5R) |
+| `gd77-main` | `main` plus the MK22 release R20260131 (`OPENGD77_20260131.zip`), unchanged |
+| `gd77-dmr-packet-data` | `gd77-main` plus DMR packet data, a USB network adapter (CDC-NCM) and MMDVM hotspot fixes |
+| `dmr-packet-data` | the same work on the 2022 code (superseded by `gd77-dmr-packet-data`) |
+| `dm1701-main` | the STM32 release R20260131 (MD-UV380 / RT-3S, DM-1701 / RT-84 and others), unchanged; its own history |
+| `dm1701-dmr-packet-data` | `dm1701-main` plus the same work |
+
+- Compare each work branch with its base: `gd77-dmr-packet-data` with `gd77-main`, `dm1701-dmr-packet-data` with
+  `dm1701-main`. The `dm1701-*` branches aren't connected to the others, so there are no pull requests between them.
+- The DMR data and network sources are the same file for file on both 2026 lines (`dmrData`, `dmrDataService`,
+  `ipGateway`, `hotspot/dmrDataFrame`, `hotspot/hotspotData`, `usb_ncm.h`); a change to one is made in both.
+- What the work adds, protocol by protocol: `docs/dmr_data.md`. The hotspot bug list and the status of each fix:
+  `KNOWN_BUGS.md`.
+- Tested: the STM32 line on a DM-1701, on air. The MK22 line builds and passes the host tests
+  (`make -C firmware/tests`) but hasn't been run on a radio.
+- Building the MK22 line from the command line: `firmware/Makefile` (see its header). The release is built with NXP's
+  MCUXpresso IDE and Redlib; with the GNU Arm toolchain and newlib-nano it doesn't fit before the codec (about 25 KB
+  over, the packet data work adds about 15 KB), so that build is for compiling and size checks only.
+- No branch contains the AMBE codec. The firmware loader merges it in from the official firmware.
+
 # User guide
 
 See https://github.com/LibreDMR/OpenGD77_UserGuide

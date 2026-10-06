@@ -55,6 +55,10 @@
 #include "usb_device_ccid.h"
 #endif
 
+#if ((defined(USB_DEVICE_CONFIG_CDC_NCM)) && (USB_DEVICE_CONFIG_CDC_NCM > 0U))
+#include "usb/usb_ncm.h"
+#endif
+
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
@@ -113,6 +117,10 @@ static const usb_device_class_map_t s_UsbDeviceClassInterfaceMap[] = {
 
 #if ((defined USB_DEVICE_CONFIG_CCID) && (USB_DEVICE_CONFIG_CCID > 0U))
     {USB_DeviceCcidInit, USB_DeviceCcidDeinit, USB_DeviceCcidEvent, kUSB_DeviceClassTypeCcid},
+#endif
+
+#if ((defined USB_DEVICE_CONFIG_CDC_NCM) && (USB_DEVICE_CONFIG_CDC_NCM > 0U))
+    {USB_DeviceNcmInit, USB_DeviceNcmDeinit, USB_DeviceNcmEvent, kUSB_DeviceClassTypeCdcNcm},
 #endif
 
     /* please make sure the following member is in the end of s_UsbDeviceClassInterfaceMap*/
