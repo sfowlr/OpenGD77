@@ -215,9 +215,11 @@ void dmrDataServiceTick(void)
 	}
 }
 
+// The radio's own DMR ID from the codeplug, not trxDMRID: per channel IDs, manual overrides and the hotspot (which uses
+// the caller's ID) change that, and the host's address must stay put
 uint32_t ipGatewayRadioId(void)
 {
-	return trxDMRID;
+	return (uiDataGlobal.userDMRId != 0) ? uiDataGlobal.userDMRId : trxDMRID;
 }
 
 // USB network gateway: a datagram from the host to a radio ID or talkgroup

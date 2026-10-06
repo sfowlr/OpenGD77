@@ -230,6 +230,11 @@ static uint8_t ncmInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
 	pdev->ep_in[NCM_NOTIFY_EP & 0x0F].bInterval = NCM_NOTIFY_INTERVAL;
 	ncm.configured = true;
 
+	// macOS only selects the data alternate setting once the link is reported up, Linux and Windows select it first.
+	// So the speed and the connection are announced now, and again when alternate 1 is selected.
+	ncm.notifyPending = 1;
+	sendNotification(NCM_NOTIFY_SPEED_CHANGE);
+
 	return (uint8_t)USBD_OK;
 }
 
@@ -378,7 +383,7 @@ static uint8_t ncmDataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
 {
 	if (epnum == (NCM_NOTIFY_EP & 0x0F))
 	{
-		if (ncm.notifyPending && usbNcmIsUp())
+		if (ncm.notifyPending && ncm.configured)
 		{
 			ncm.notifyPending = 0;
 			sendNotification(NCM_NOTIFY_NETWORK_CONNECTION);
