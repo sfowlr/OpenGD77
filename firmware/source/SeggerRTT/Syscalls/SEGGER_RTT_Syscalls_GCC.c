@@ -1,3 +1,4 @@
+#if defined(USING_EXTERNAL_DEBUGGER)
 /*********************************************************************
 *                SEGGER Microcontroller GmbH & Co. KG                *
 *                        The Embedded Experts                        *
@@ -132,3 +133,4 @@ int _write_r(struct _reent *r, int file, const void *ptr, int len) {
 
 #endif
 /****** End Of File *************************************************/
+#endif

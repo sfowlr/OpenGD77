@@ -1,41 +1,61 @@
 /*
- * Copyright (C)2019 Roger Clark. VK3KYY / G4KYF
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
+#if defined(PLATFORM_MD9600)
+#include "hardware/ST7567.h"
+#elif (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
+#include "hardware/HX8353E.h"
+#else
 #include "hardware/UC1701.h"
-#include "functions/settings.h"
+#endif
+#include "user_interface/uiGlobals.h"
 #include "user_interface/menuSystem.h"
 #include "user_interface/uiLocalisation.h"
 #include "user_interface/uiUtilities.h"
+
 
 static void updateScreen(bool isFirstRun);
 static void handleEvent(uiEvent_t *ev);
 static void updateBacklightMode(uint8_t mode);
 static void setDisplayInvert(bool invert);
 static void checkMinBacklightValue(void);
+static void buildTimeZoneBufferText(char * buffer);
+static void applySettings(void);
+static void exitCallback(void *data);
 
 static menuStatus_t menuDisplayOptionsExitCode = MENU_STATUS_SUCCESS;
 
 static const int BACKLIGHT_MAX_TIMEOUT = 30;
-#if defined (PLATFORM_RD5R)
-	static const int CONTRAST_MAX_VALUE = 10;// Maximum value which still seems to be readable
-	static const int CONTRAST_MIN_VALUE = 0;// Minimum value which still seems to be readable
-#else
-	static const int CONTRAST_MAX_VALUE = 30;// Maximum value which still seems to be readable
-	static const int CONTRAST_MIN_VALUE = 5;// Minimum value which still seems to be readable
+#if defined(PLATFORM_RD5R)
+static const int CONTRAST_MAX_VALUE = 10;// Maximum value which still seems to be readable
+static const int CONTRAST_MIN_VALUE = 0;// Minimum value which still seems to be readable
+#elif ! (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
+static const int CONTRAST_MAX_VALUE = 30;// Maximum value which still seems to be readable
+static const int CONTRAST_MIN_VALUE = 5;// Minimum value which still seems to be readable
 #endif
 
 static const int BACKLIGHT_TIMEOUT_STEP = 5;
@@ -45,10 +65,46 @@ static const int BACKLIGHT_PERCENTAGE_STEP_SMALL = 1;
 
 static const char *contactOrders[] = { "Ct/DB/TA", "DB/Ct/TA", "TA/Ct/DB", "TA/DB/Ct" };
 
-enum DISPLAY_MENU_LIST { DISPLAY_MENU_BRIGHTNESS = 0, DISPLAY_MENU_BRIGHTNESS_OFF, DISPLAY_MENU_CONTRAST, DISPLAY_MENU_BACKLIGHT_MODE,
-	DISPLAY_MENU_TIMEOUT, DISPLAY_MENU_COLOUR_INVERT, DISPLAY_MENU_CONTACT_DISPLAY_ORDER, DISPLAY_MENU_CONTACT_DISPLAY_SPLIT_CONTACT,
-	DISPLAY_BATTERY_UNIT_IN_HEADER, DISPLAY_EXTENDED_INFOS, DISPLAY_ALL_LEDS_ENABLED,
-	NUM_DISPLAY_MENU_ITEMS };
+enum
+{
+#if defined(HAS_COLOURS)
+	DISPLAY_TYPE_STYLE,
+#endif
+	DISPLAY_MENU_BRIGHTNESS,
+#if ! defined(PLATFORM_GD77S)
+	DISPLAY_MENU_BRIGHTNESS_NIGHT,
+#endif
+	DISPLAY_MENU_BRIGHTNESS_OFF,
+#if ! (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
+	DISPLAY_MENU_CONTRAST,
+#endif
+	DISPLAY_MENU_BACKLIGHT_MODE,
+	DISPLAY_MENU_TIMEOUT,
+	DISPLAY_MENU_SCREEN_INVERT,
+#if ! defined(PLATFORM_GD77S)
+	DISPLAY_AUTO_NIGHT,
+#endif
+	DISPLAY_MENU_CONTACT_DISPLAY_ORDER,
+	DISPLAY_MENU_CONTACT_DISPLAY_SPLIT_CONTACT,
+#if defined(HAS_COLOURS) || defined(PLATFORM_MD9600)
+	DISPLAY_TIME_IN_HEADER,
+#endif
+#if ! defined(PLATFORM_MD9600)
+	DISPLAY_BATTERY_UNIT_IN_HEADER,
+#endif
+	DISPLAY_EXTENDED_INFOS,
+#if defined(HAS_SOFT_VOLUME)
+	DISPLAY_VISUAL_VOLUME,
+#endif
+#if ! defined(PLATFORM_MD9600)
+	DISPLAY_ALL_LEDS_ENABLED,
+#endif
+	DISPLAY_TIMEZONE_VALUE,
+	DISPLAY_TIME_UTC_OR_LOCAL,
+	DISPLAY_SHOW_DISTANCE,
+	DISPLAY_DMR_LAST_TALKER_ON_SCREEN,
+	NUM_DISPLAY_MENU_ITEMS
+};
 
 menuStatus_t menuDisplayOptions(uiEvent_t *ev, bool isFirstRun)
 {
@@ -57,7 +113,7 @@ menuStatus_t menuDisplayOptions(uiEvent_t *ev, bool isFirstRun)
 		menuDataGlobal.menuOptionsSetQuickkey = 0;
 		menuDataGlobal.menuOptionsTimeout = 0;
 		menuDataGlobal.newOptionSelected = true;
-		menuDataGlobal.endIndex = NUM_DISPLAY_MENU_ITEMS;
+		menuDataGlobal.numItems = NUM_DISPLAY_MENU_ITEMS;
 
 		if (originalNonVolatileSettings.magicNumber == 0xDEADBEEF)
 		{
@@ -67,11 +123,11 @@ menuStatus_t menuDisplayOptions(uiEvent_t *ev, bool isFirstRun)
 
 		voicePromptsInit();
 		voicePromptsAppendPrompt(PROMPT_SILENCE);
+		voicePromptsAppendLanguageString(currentLanguage->display_options);
+		voicePromptsAppendLanguageString(currentLanguage->menu);
 		voicePromptsAppendPrompt(PROMPT_SILENCE);
-		voicePromptsAppendLanguageString(&currentLanguage->display_options);
-		voicePromptsAppendLanguageString(&currentLanguage->menu);
-		voicePromptsAppendPrompt(PROMPT_SILENCE);
-		voicePromptsAppendPrompt(PROMPT_SILENCE);
+
+		menuSystemRegisterExitCallback(exitCallback, NULL);
 
 		updateScreen(true);
 		return (MENU_STATUS_LIST_TYPE | MENU_STATUS_SUCCESS);
@@ -92,23 +148,30 @@ menuStatus_t menuDisplayOptions(uiEvent_t *ev, bool isFirstRun)
 static void updateScreen(bool isFirstRun)
 {
 	int mNum = 0;
-	static const int bufferLen = 17;
-	char buf[bufferLen];
-	char * const *leftSide = NULL;// initialize to please the compiler
-	char * const *rightSideConst = NULL;// initialize to please the compiler
-	char rightSideVar[bufferLen];
+	char buf[SCREEN_LINE_BUFFER_SIZE];
+	const char *leftSide = NULL;// initialize to please the compiler
+	const char *rightSideConst = NULL;// initialize to please the compiler
+	char rightSideVar[SCREEN_LINE_BUFFER_SIZE];
 	voicePrompt_t rightSideUnitsPrompt;
-	const char * rightSideUnitsStr;
+	const char *rightSideUnitsStr;
 
-	ucClearBuf();
-	bool settingOption = uiShowQuickKeysChoices(buf, bufferLen, currentLanguage->display_options);
+	displayClearBuf();
+	bool settingOption = uiQuickKeysShowChoices(buf, SCREEN_LINE_BUFFER_SIZE, currentLanguage->display_options);
 
-	// Can only display 3 of the options at a time menu at -1, 0 and +1
-	for(int i = -1; i <= 1; i++)
+	for (int i = MENU_START_ITERATION_VALUE; i <= MENU_END_ITERATION_VALUE; i++)
 	{
 		if ((settingOption == false) || (i == 0))
 		{
 			mNum = menuGetMenuOffset(NUM_DISPLAY_MENU_ITEMS, i);
+			if (mNum == MENU_OFFSET_BEFORE_FIRST_ENTRY)
+			{
+				continue;
+			}
+			else if (mNum == MENU_OFFSET_AFTER_LAST_ENTRY)
+			{
+				break;
+			}
+
 			buf[0] = 0;
 			leftSide = NULL;
 			rightSideConst = NULL;
@@ -118,64 +181,101 @@ static void updateScreen(bool isFirstRun)
 
 			switch(mNum)
 			{
+#if defined(HAS_COLOURS)
+				case DISPLAY_TYPE_STYLE:
+					leftSide = currentLanguage->text_size;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%d", settingsIsOptionBitSet(BIT_UI_USES_DOUBLE_HEIGHT) ? 2 : 1);
+					break;
+#endif
+
 				case DISPLAY_MENU_BRIGHTNESS:
-					leftSide = (char * const *)&currentLanguage->brightness;
-					snprintf(rightSideVar, bufferLen, "%d%%", nonVolatileSettings.displayBacklightPercentage);
+					leftSide = currentLanguage->brightness;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%d%%", nonVolatileSettings.displayBacklightPercentage[DAY]);
 					break;
+
+#if ! defined(PLATFORM_GD77S)
+				case DISPLAY_MENU_BRIGHTNESS_NIGHT:
+					leftSide = currentLanguage->brightness_night;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%d%%", nonVolatileSettings.displayBacklightPercentage[NIGHT]);
+					break;
+#endif
 				case DISPLAY_MENU_BRIGHTNESS_OFF:
-					leftSide = (char * const *)&currentLanguage->brightness_off;
-					snprintf(rightSideVar, bufferLen, "%d%%", nonVolatileSettings.displayBacklightPercentageOff);
+					leftSide = currentLanguage->brightness_off;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%d%%", nonVolatileSettings.displayBacklightPercentageOff);
 					break;
+
+#if ! (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
 				case DISPLAY_MENU_CONTRAST:
-					leftSide = (char * const *)&currentLanguage->contrast;
-					snprintf(rightSideVar, bufferLen, "%d", nonVolatileSettings.displayContrast);
+					leftSide = currentLanguage->contrast;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%d", nonVolatileSettings.displayContrast);
 					break;
+#endif
 				case DISPLAY_MENU_BACKLIGHT_MODE:
 					{
-						const char * const *backlightModes[] = { &currentLanguage->Auto, &currentLanguage->squelch, &currentLanguage->manual, &currentLanguage->buttons, &currentLanguage->none };
-						leftSide = (char * const *)&currentLanguage->mode;
-						rightSideConst = (char * const *)backlightModes[nonVolatileSettings.backlightMode];
+						const char *backlightModes[] = { currentLanguage->Auto, currentLanguage->squelch, currentLanguage->manual, currentLanguage->buttons, currentLanguage->none };
+						leftSide = currentLanguage->mode;
+						rightSideConst = backlightModes[nonVolatileSettings.backlightMode];
 					}
 					break;
+
 				case DISPLAY_MENU_TIMEOUT:
-					leftSide = (char * const *)&currentLanguage->backlight_timeout;
+					leftSide = currentLanguage->backlight_timeout;
 					if ((nonVolatileSettings.backlightMode == BACKLIGHT_MODE_AUTO) ||
 							(nonVolatileSettings.backlightMode == BACKLIGHT_MODE_SQUELCH) ||
 							(nonVolatileSettings.backlightMode == BACKLIGHT_MODE_BUTTONS))
 					{
 						if (nonVolatileSettings.backLightTimeout == 0)
 						{
-							rightSideConst = (char * const *)&currentLanguage->no;
+							rightSideConst = currentLanguage->no;
 						}
 						else
 						{
-							snprintf(rightSideVar, bufferLen, "%d", nonVolatileSettings.backLightTimeout);
+							snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%d", nonVolatileSettings.backLightTimeout);
 							rightSideUnitsPrompt = PROMPT_SECONDS;
 							rightSideUnitsStr = "s";
 						}
 					}
 					else
 					{
-						rightSideConst = (char * const *)&currentLanguage->n_a;
+						rightSideConst = currentLanguage->n_a;
 					}
 					break;
-				case DISPLAY_MENU_COLOUR_INVERT:
-					leftSide = (char * const *)&currentLanguage->display_background_colour;
-					rightSideConst = settingsIsOptionBitSet(BIT_INVERSE_VIDEO) ? (char * const *)&currentLanguage->colour_invert : (char * const *)&currentLanguage->colour_normal;
+
+				case DISPLAY_MENU_SCREEN_INVERT:
+					leftSide = currentLanguage->display_screen_invert;
+					rightSideConst = settingsIsOptionBitSet(BIT_INVERSE_VIDEO) ? currentLanguage->screen_invert : currentLanguage->screen_normal;
 					break;
+
+#if ! defined(PLATFORM_GD77S)
+				case DISPLAY_AUTO_NIGHT:
+					leftSide = currentLanguage->auto_night;
+					rightSideConst = settingsIsOptionBitSet(BIT_AUTO_NIGHT) ? currentLanguage->on : currentLanguage->off;
+					break;
+#endif
+
 				case DISPLAY_MENU_CONTACT_DISPLAY_ORDER:
-					leftSide = (char * const *)&currentLanguage->priority_order;
-					snprintf(rightSideVar, bufferLen, "%s",contactOrders[nonVolatileSettings.contactDisplayPriority]);
+					leftSide = currentLanguage->priority_order;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%s", contactOrders[nonVolatileSettings.contactDisplayPriority]);
 					break;
+
 				case DISPLAY_MENU_CONTACT_DISPLAY_SPLIT_CONTACT:
 					{
-						const char * const *splitContact[] = { &currentLanguage->one_line, &currentLanguage->two_lines, &currentLanguage->Auto };
-						leftSide = (char * const *)&currentLanguage->contact;
-						rightSideConst = (char * const *)splitContact[nonVolatileSettings.splitContact];
+						const char *splitContact[] = { currentLanguage->one_line, currentLanguage->two_lines, currentLanguage->Auto };
+						leftSide = currentLanguage->contact;
+						rightSideConst = splitContact[nonVolatileSettings.splitContact];
 					}
 					break;
+
+#if defined(HAS_COLOURS) || defined(PLATFORM_MD9600)
+				case DISPLAY_TIME_IN_HEADER:
+					leftSide = currentLanguage->time;
+					rightSideConst = settingsIsOptionBitSet(BIT_DISPLAY_TIME_IN_HEADER) ? currentLanguage->on : currentLanguage->off;
+					break;
+#endif
+
+#if ! defined(PLATFORM_MD9600)
 				case DISPLAY_BATTERY_UNIT_IN_HEADER:
-					leftSide = (char * const *)&currentLanguage->battery;
+					leftSide = currentLanguage->battery;
 					if (settingsIsOptionBitSet(BIT_BATTERY_VOLTAGE_IN_HEADER))
 					{
 						rightSideUnitsPrompt = PROMPT_VOLTS;
@@ -187,21 +287,60 @@ static void updateScreen(bool isFirstRun)
 						rightSideUnitsStr = "%";
 					}
 					break;
+#endif
 				case DISPLAY_EXTENDED_INFOS:
 					{
-						const char * const *extendedInfos[] = { &currentLanguage->off, &currentLanguage->ts, &currentLanguage->pwr, &currentLanguage->both };
-						leftSide = (char * const *)&currentLanguage->info;
-						rightSideConst = (char * const *)extendedInfos[nonVolatileSettings.extendedInfosOnScreen];
+						const char *extendedInfos[] = { currentLanguage->off, currentLanguage->ts, currentLanguage->pwr, currentLanguage->both };
+						leftSide = currentLanguage->info;
+						rightSideConst = extendedInfos[nonVolatileSettings.extendedInfosOnScreen];
 					}
 					break;
+
+#if defined(HAS_SOFT_VOLUME)
+				case DISPLAY_VISUAL_VOLUME:
+					leftSide = currentLanguage->volume;
+					rightSideConst = settingsIsOptionBitSet(BIT_VISUAL_VOLUME) ? currentLanguage->on : currentLanguage->off;
+					break;
+#endif
+
+#if ! defined(PLATFORM_MD9600)
 				case DISPLAY_ALL_LEDS_ENABLED:
-					leftSide = (char * const *)&currentLanguage->leds;
-					rightSideConst = settingsIsOptionBitSet(BIT_ALL_LEDS_DISABLED) ? (char * const *)&currentLanguage->off : (char * const *)&currentLanguage->on;
+					leftSide = currentLanguage->leds;
+					rightSideConst = settingsIsOptionBitSet(BIT_ALL_LEDS_DISABLED) ? currentLanguage->off : currentLanguage->on;
+					break;
+#endif
+				case DISPLAY_TIMEZONE_VALUE:
+					leftSide = currentLanguage->timeZone;
+					buildTimeZoneBufferText(rightSideVar);
+					break;
+
+				case DISPLAY_TIME_UTC_OR_LOCAL:
+					leftSide = currentLanguage->UTC;
+					rightSideConst = (nonVolatileSettings.timezone & 0x80) ? currentLanguage->no : currentLanguage->yes;
+					break;
+
+				case DISPLAY_SHOW_DISTANCE:
+					leftSide = currentLanguage->show_distance;
+					rightSideConst = settingsIsOptionBitSet(BIT_DISPLAY_CHANNEL_DISTANCE) ? currentLanguage->on : currentLanguage->off;
+					break;
+
+				case DISPLAY_DMR_LAST_TALKER_ON_SCREEN:
+					leftSide = currentLanguage->last_talker;
+					if (nonVolatileSettings.lastTalkerOnScreenTimer > 0)
+					{
+						snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%u", nonVolatileSettings.lastTalkerOnScreenTimer);
+						rightSideUnitsPrompt = PROMPT_SECONDS;
+						rightSideUnitsStr = "s";
+					}
+					else
+					{
+						rightSideConst = currentLanguage->off;
+					}
 					break;
 			}
 
 			// workaround for non standard format of line for colour display
-			snprintf(buf, bufferLen, "%s:%s", *leftSide, (rightSideVar[0] ? rightSideVar : (rightSideConst ? *rightSideConst : "")));
+			snprintf(buf, SCREEN_LINE_BUFFER_SIZE, "%s:%s", leftSide, (rightSideVar[0] ? rightSideVar : (rightSideConst ? rightSideConst : "")));
 
 			if (i == 0)
 			{
@@ -212,9 +351,9 @@ static void updateScreen(bool isFirstRun)
 					voicePromptsInit();
 				}
 
-				if (!wasPlaying || menuDataGlobal.newOptionSelected)
+				if (!wasPlaying || (menuDataGlobal.newOptionSelected || (menuDataGlobal.menuOptionsTimeout > 0)))
 				{
-					voicePromptsAppendLanguageString((const char * const *)leftSide);
+					voicePromptsAppendLanguageString(leftSide);
 				}
 
 				if ((rightSideVar[0] != 0) || ((rightSideVar[0] == 0) && (rightSideConst == NULL)))
@@ -223,7 +362,7 @@ static void updateScreen(bool isFirstRun)
 				}
 				else
 				{
-					voicePromptsAppendLanguageString((const char * const *)rightSideConst);
+					voicePromptsAppendLanguageString(rightSideConst);
 				}
 
 				if (rightSideUnitsPrompt != PROMPT_SILENCE)
@@ -233,7 +372,7 @@ static void updateScreen(bool isFirstRun)
 
 				if (rightSideUnitsStr != NULL)
 				{
-					strncat(rightSideVar, rightSideUnitsStr, bufferLen);
+					strncat(rightSideVar, rightSideUnitsStr, SCREEN_LINE_BUFFER_SIZE);
 				}
 
 				if (menuDataGlobal.menuOptionsTimeout != -1)
@@ -249,21 +388,21 @@ static void updateScreen(bool isFirstRun)
 			// QuickKeys
 			if (menuDataGlobal.menuOptionsTimeout > 0)
 			{
-				menuDisplaySettingOption(*leftSide, (rightSideVar[0] ? rightSideVar : *rightSideConst));
+				menuDisplaySettingOption(leftSide, (rightSideVar[0] ? rightSideVar : rightSideConst));
 			}
 			else
 			{
 				if (rightSideUnitsStr != NULL)
 				{
-					strncat(buf, rightSideUnitsStr, bufferLen);
+					strncat(buf, rightSideUnitsStr, SCREEN_LINE_BUFFER_SIZE);
 				}
 
-				menuDisplayEntry(i, mNum, buf);
+				menuDisplayEntry(i, mNum, buf, (strlen(leftSide) + 1), THEME_ITEM_FG_MENU_ITEM, THEME_ITEM_FG_OPTIONS_VALUE, THEME_ITEM_BG);
 			}
 		}
 	}
 
-	ucRender();
+	displayRender();
 }
 
 static void handleEvent(uiEvent_t *ev)
@@ -272,22 +411,46 @@ static void handleEvent(uiEvent_t *ev)
 
 	if ((menuDataGlobal.menuOptionsTimeout > 0) && (!BUTTONCHECK_DOWN(ev, BUTTON_SK2)))
 	{
-		menuDataGlobal.menuOptionsTimeout--;
-		if (menuDataGlobal.menuOptionsTimeout == 0)
+		if (voicePromptsIsPlaying() == false)
 		{
-			resetOriginalSettingsData();
-			menuSystemPopPreviousMenu();
-			return;
+			menuDataGlobal.menuOptionsTimeout--;
+			if (menuDataGlobal.menuOptionsTimeout == 0)
+			{
+				applySettings();
+				menuSystemPopPreviousMenu();
+				return;
+			}
 		}
 	}
 
 	if (ev->events & FUNCTION_EVENT)
 	{
 		isDirty = true;
-		if ((QUICKKEY_TYPE(ev->function) == QUICKKEY_MENU) && (QUICKKEY_ENTRYID(ev->function) < NUM_DISPLAY_MENU_ITEMS))
+		if (ev->function == FUNC_REDRAW)
+		{
+			updateScreen(false);
+			return;
+		}
+		else if ((QUICKKEY_TYPE(ev->function) == QUICKKEY_MENU) && (QUICKKEY_ENTRYID(ev->function) < NUM_DISPLAY_MENU_ITEMS))
 		{
 			menuDataGlobal.currentItemIndex = QUICKKEY_ENTRYID(ev->function);
+
+#if ! defined(PLATFORM_GD77S)
+			// Control the brightness of the current daytime.
+			if ((menuDataGlobal.currentItemIndex == DISPLAY_MENU_BRIGHTNESS) || (menuDataGlobal.currentItemIndex == DISPLAY_MENU_BRIGHTNESS_NIGHT))
+			{
+				if (DAYTIME_CURRENT == DAY)
+				{
+					menuDataGlobal.currentItemIndex = DISPLAY_MENU_BRIGHTNESS;
+				}
+				else
+				{
+					menuDataGlobal.currentItemIndex = DISPLAY_MENU_BRIGHTNESS_NIGHT;
+				}
+			}
+#endif
 		}
+
 		if ((QUICKKEY_FUNCTIONID(ev->function) != 0))
 		{
 			menuDataGlobal.menuOptionsTimeout = 1000;
@@ -304,7 +467,7 @@ static void handleEvent(uiEvent_t *ev)
 
 	if ((ev->events & KEY_EVENT) && (menuDataGlobal.menuOptionsSetQuickkey == 0) && (menuDataGlobal.menuOptionsTimeout == 0))
 	{
-		if (KEYCHECK_PRESS(ev->keys, KEY_DOWN) && (menuDataGlobal.endIndex != 0))
+		if (KEYCHECK_PRESS(ev->keys, KEY_DOWN) && (menuDataGlobal.numItems != 0))
 		{
 			isDirty = true;
 			menuSystemMenuIncrement(&menuDataGlobal.currentItemIndex, NUM_DISPLAY_MENU_ITEMS);
@@ -320,63 +483,12 @@ static void handleEvent(uiEvent_t *ev)
 		}
 		else if (KEYCHECK_SHORTUP(ev->keys, KEY_GREEN))
 		{
-			// All parameters has already been applied
-			settingsSaveIfNeeded(true);
-			resetOriginalSettingsData();
+			applySettings();
 			menuSystemPopAllAndDisplayRootMenu();
 			return;
 		}
 		else if (KEYCHECK_SHORTUP(ev->keys, KEY_RED))
 		{
-			bool displayIsLit = displayIsBacklightLit();
-
-			if (nonVolatileSettings.displayContrast != originalNonVolatileSettings.displayContrast)
-			{
-				settingsSet(nonVolatileSettings.displayContrast, originalNonVolatileSettings.displayContrast);
-				ucSetContrast(nonVolatileSettings.displayContrast);
-			}
-
-			if ((nonVolatileSettings.bitfieldOptions & BIT_INVERSE_VIDEO) != (originalNonVolatileSettings.bitfieldOptions & BIT_INVERSE_VIDEO))
-			{
-				settingsSetOptionBit(BIT_INVERSE_VIDEO, ((originalNonVolatileSettings.bitfieldOptions & BIT_INVERSE_VIDEO) != 0));
-				displayInit(settingsIsOptionBitSet(BIT_INVERSE_VIDEO));// Need to perform a full reset on the display to change back to non-inverted
-			}
-
-			settingsSet(nonVolatileSettings.displayBacklightPercentage, originalNonVolatileSettings.displayBacklightPercentage);
-			settingsSet(nonVolatileSettings.displayBacklightPercentageOff, originalNonVolatileSettings.displayBacklightPercentageOff);
-			settingsSet(nonVolatileSettings.backLightTimeout, originalNonVolatileSettings.backLightTimeout);
-
-			if (nonVolatileSettings.backlightMode != originalNonVolatileSettings.backlightMode)
-			{
-				updateBacklightMode(originalNonVolatileSettings.backlightMode);
-			}
-
-			if ((nonVolatileSettings.backlightMode == BACKLIGHT_MODE_MANUAL) && (!displayIsLit))
-			{
-				gpioSetDisplayBacklightIntensityPercentage(nonVolatileSettings.displayBacklightPercentageOff);
-			}
-
-			settingsSet(nonVolatileSettings.contactDisplayPriority, originalNonVolatileSettings.contactDisplayPriority);
-			settingsSet(nonVolatileSettings.splitContact, originalNonVolatileSettings.splitContact);
-
-			if ((nonVolatileSettings.bitfieldOptions & BIT_BATTERY_VOLTAGE_IN_HEADER) != (originalNonVolatileSettings.bitfieldOptions & BIT_BATTERY_VOLTAGE_IN_HEADER))
-			{
-				settingsSetOptionBit(BIT_BATTERY_VOLTAGE_IN_HEADER, ((originalNonVolatileSettings.bitfieldOptions & BIT_BATTERY_VOLTAGE_IN_HEADER) != 0));
-			}
-
-			settingsSet(nonVolatileSettings.extendedInfosOnScreen, originalNonVolatileSettings.extendedInfosOnScreen);
-
-			if ((nonVolatileSettings.bitfieldOptions & BIT_ALL_LEDS_DISABLED) != (originalNonVolatileSettings.bitfieldOptions & BIT_ALL_LEDS_DISABLED))
-			{
-				int state = LEDs_PinRead(GPIO_LEDgreen, Pin_LEDgreen);
-
-				settingsSetOptionBit(BIT_ALL_LEDS_DISABLED, ((originalNonVolatileSettings.bitfieldOptions & BIT_ALL_LEDS_DISABLED) != 0));
-				GPIO_PinWrite(GPIO_LEDgreen, Pin_LEDgreen, ((nonVolatileSettings.bitfieldOptions & BIT_ALL_LEDS_DISABLED) ? 0 : state));
-			}
-
-
-			settingsSaveIfNeeded(true);
-			resetOriginalSettingsData();
 			menuSystemPopPreviousMenu();
 			return;
 		}
@@ -391,7 +503,12 @@ static void handleEvent(uiEvent_t *ev)
 	if ((ev->events & (KEY_EVENT | FUNCTION_EVENT)) && (menuDataGlobal.menuOptionsSetQuickkey == 0))
 	{
 		bool displayIsLit = displayIsBacklightLit();
-		if (KEYCHECK_PRESS(ev->keys, KEY_RIGHT) || (QUICKKEY_FUNCTIONID(ev->function) == FUNC_RIGHT))
+
+		if (KEYCHECK_PRESS(ev->keys, KEY_RIGHT)
+#if defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+				|| KEYCHECK_SHORTUP(ev->keys, KEY_ROTARY_INCREMENT)
+#endif
+				|| (QUICKKEY_FUNCTIONID(ev->function) == FUNC_RIGHT))
 		{
 			if (menuDataGlobal.menuOptionsTimeout > 0)
 			{
@@ -401,17 +518,32 @@ static void handleEvent(uiEvent_t *ev)
 			menuDataGlobal.newOptionSelected = false;
 			switch(menuDataGlobal.currentItemIndex)
 			{
-				case DISPLAY_MENU_BRIGHTNESS:
-					settingsIncrement(nonVolatileSettings.displayBacklightPercentage,
-							(int8_t) ((nonVolatileSettings.displayBacklightPercentage < BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP));
-
-					if (nonVolatileSettings.displayBacklightPercentage > BACKLIGHT_MAX_PERCENTAGE)
+#if defined(HAS_COLOURS)
+				case DISPLAY_TYPE_STYLE:
+					if (settingsIsOptionBitSet(BIT_UI_USES_DOUBLE_HEIGHT) == false)
 					{
-						settingsSet(nonVolatileSettings.displayBacklightPercentage, (int8_t) BACKLIGHT_MAX_PERCENTAGE);
+						settingsSetOptionBit(BIT_UI_USES_DOUBLE_HEIGHT, true);
 					}
 					break;
+#endif
+
+				case DISPLAY_MENU_BRIGHTNESS:
+					settingsIncrement(nonVolatileSettings.displayBacklightPercentage[DAY],
+							(int8_t) ((nonVolatileSettings.displayBacklightPercentage[DAY] < BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP));
+
+					if (nonVolatileSettings.displayBacklightPercentage[DAY] > BACKLIGHT_MAX_PERCENTAGE)
+					{
+						settingsSet(nonVolatileSettings.displayBacklightPercentage[DAY], (int8_t) BACKLIGHT_MAX_PERCENTAGE);
+					}
+
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+					displayLightTrigger(true);
+#endif
+					break;
+
 				case DISPLAY_MENU_BRIGHTNESS_OFF:
-					if (nonVolatileSettings.displayBacklightPercentageOff < nonVolatileSettings.displayBacklightPercentage)
+					if ((nonVolatileSettings.displayBacklightPercentageOff < nonVolatileSettings.displayBacklightPercentage[DAY]) &&
+							(nonVolatileSettings.displayBacklightPercentageOff < nonVolatileSettings.displayBacklightPercentage[NIGHT]))
 					{
 						settingsIncrement(nonVolatileSettings.displayBacklightPercentageOff,
 								(int8_t) ((nonVolatileSettings.displayBacklightPercentageOff < BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP));
@@ -429,20 +561,28 @@ static void handleEvent(uiEvent_t *ev)
 						}
 					}
 					break;
+
+#if ! (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
 				case DISPLAY_MENU_CONTRAST:
 					if (nonVolatileSettings.displayContrast < CONTRAST_MAX_VALUE)
 					{
 						settingsIncrement(nonVolatileSettings.displayContrast, 1);
 					}
-					ucSetContrast(nonVolatileSettings.displayContrast);
+					displaySetContrast(nonVolatileSettings.displayContrast);
 					break;
+#endif
 				case DISPLAY_MENU_BACKLIGHT_MODE:
+#if (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
+					if (nonVolatileSettings.backlightMode < BACKLIGHT_MODE_BUTTONS )
+#else
 					if (nonVolatileSettings.backlightMode < BACKLIGHT_MODE_NONE)
+#endif
 					{
 						settingsIncrement(nonVolatileSettings.backlightMode, 1);
 						updateBacklightMode(nonVolatileSettings.backlightMode);
 					}
 					break;
+
 				case DISPLAY_MENU_TIMEOUT:
 					if ((nonVolatileSettings.backlightMode == BACKLIGHT_MODE_AUTO) ||
 							(nonVolatileSettings.backlightMode == BACKLIGHT_MODE_SQUELCH) ||
@@ -455,46 +595,136 @@ static void handleEvent(uiEvent_t *ev)
 						}
 					}
 					break;
-				case DISPLAY_MENU_COLOUR_INVERT:
+
+				case DISPLAY_MENU_SCREEN_INVERT:
 					setDisplayInvert(true);
 					break;
+
+#if ! defined(PLATFORM_GD77S)
+				case DISPLAY_AUTO_NIGHT:
+					if (settingsIsOptionBitSet(BIT_AUTO_NIGHT) == false)
+					{
+						settingsSetOptionBit(BIT_AUTO_NIGHT, true);
+					}
+					break;
+
+				case DISPLAY_MENU_BRIGHTNESS_NIGHT:
+					settingsIncrement(nonVolatileSettings.displayBacklightPercentage[NIGHT],
+							(int8_t) ((nonVolatileSettings.displayBacklightPercentage[NIGHT] < BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP));
+
+					if (nonVolatileSettings.displayBacklightPercentage[NIGHT] > BACKLIGHT_MAX_PERCENTAGE)
+					{
+						settingsSet(nonVolatileSettings.displayBacklightPercentage[NIGHT], (int8_t) BACKLIGHT_MAX_PERCENTAGE);
+					}
+
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+					displayLightTrigger(true);
+#endif
+					break;
+#endif
 				case DISPLAY_MENU_CONTACT_DISPLAY_ORDER:
 					if (nonVolatileSettings.contactDisplayPriority < CONTACT_DISPLAY_PRIO_TA_DB_CC)
 					{
 						settingsIncrement(nonVolatileSettings.contactDisplayPriority, 1);
 					}
 					break;
+
 				case DISPLAY_MENU_CONTACT_DISPLAY_SPLIT_CONTACT:
 					if (nonVolatileSettings.splitContact < SPLIT_CONTACT_AUTO)
 					{
 						settingsIncrement(nonVolatileSettings.splitContact, 1);
 					}
 					break;
+
+#if defined(HAS_COLOURS) || defined(PLATFORM_MD9600)
+				case DISPLAY_TIME_IN_HEADER:
+					if (settingsIsOptionBitSet(BIT_DISPLAY_TIME_IN_HEADER) == false)
+					{
+						settingsSetOptionBit(BIT_DISPLAY_TIME_IN_HEADER, true);
+					}
+					break;
+#endif
+
+#if ! defined(PLATFORM_MD9600)
 				case DISPLAY_BATTERY_UNIT_IN_HEADER:
 					if (settingsIsOptionBitSet(BIT_BATTERY_VOLTAGE_IN_HEADER) == false)
 					{
 						settingsSetOptionBit(BIT_BATTERY_VOLTAGE_IN_HEADER, true);
 					}
 					break;
+#endif
 				case DISPLAY_EXTENDED_INFOS:
 					if (nonVolatileSettings.extendedInfosOnScreen < INFO_ON_SCREEN_BOTH)
 					{
 						settingsIncrement(nonVolatileSettings.extendedInfosOnScreen, 1);
 					}
 					break;
+
+#if defined(HAS_SOFT_VOLUME)
+				case DISPLAY_VISUAL_VOLUME:
+					if (settingsIsOptionBitSet(BIT_VISUAL_VOLUME) == false)
+					{
+						settingsSetOptionBit(BIT_VISUAL_VOLUME, true);
+					}
+					break;
+#endif
+
+#if ! defined(PLATFORM_MD9600)
 				case DISPLAY_ALL_LEDS_ENABLED:
 					if (settingsIsOptionBitSet(BIT_ALL_LEDS_DISABLED))
 					{
-						int state = LEDs_PinRead(GPIO_LEDgreen, Pin_LEDgreen);
+						uint8_t state = LedRead(LED_GREEN);
 						settingsSetOptionBit(BIT_ALL_LEDS_DISABLED, false);
-						GPIO_PinWrite(GPIO_LEDgreen, Pin_LEDgreen, state);
+						LedWriteDirect(LED_GREEN, state);
+					}
+					break;
+#endif
+				case DISPLAY_TIMEZONE_VALUE:
+					{
+						int tz = (nonVolatileSettings.timezone & 0x7F);
+
+						if (BUTTONCHECK_DOWN(ev, BUTTON_SK2))
+						{
+							tz++;
+						}
+						else
+						{
+							tz += 4;
+						}
+
+						if (tz <= ((14 * 4) + SETTINGS_TIMEZONE_UTC))
+						{
+							settingsSet(nonVolatileSettings.timezone, ((nonVolatileSettings.timezone & ~0x7F) + tz));
+						}
+					}
+					break;
+
+				case DISPLAY_TIME_UTC_OR_LOCAL:
+					settingsSet(nonVolatileSettings.timezone, (uint8_t) (nonVolatileSettings.timezone & ~0x80));
+					break;
+
+				case DISPLAY_SHOW_DISTANCE:
+					if (settingsIsOptionBitSet(BIT_DISPLAY_CHANNEL_DISTANCE) == false)
+					{
+						settingsSetOptionBit(BIT_DISPLAY_CHANNEL_DISTANCE, true);
+					}
+					break;
+
+				case DISPLAY_DMR_LAST_TALKER_ON_SCREEN:
+					if (nonVolatileSettings.lastTalkerOnScreenTimer < 30U)
+					{
+						settingsIncrement(nonVolatileSettings.lastTalkerOnScreenTimer, 1U);
 					}
 					break;
 			}
 		}
-		else if (KEYCHECK_PRESS(ev->keys, KEY_LEFT) || (QUICKKEY_FUNCTIONID(ev->function) == FUNC_LEFT))
+		else if (KEYCHECK_PRESS(ev->keys, KEY_LEFT)
+#if defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+				|| KEYCHECK_SHORTUP(ev->keys, KEY_ROTARY_DECREMENT)
+#endif
+				|| (QUICKKEY_FUNCTIONID(ev->function) == FUNC_LEFT))
 		{
-			if (menuDataGlobal.menuOptionsTimeout>0)
+			if (menuDataGlobal.menuOptionsTimeout > 0)
 			{
 				menuDataGlobal.menuOptionsTimeout = 1000;
 			}
@@ -502,17 +732,30 @@ static void handleEvent(uiEvent_t *ev)
 			menuDataGlobal.newOptionSelected = false;
 			switch(menuDataGlobal.currentItemIndex)
 			{
-				case DISPLAY_MENU_BRIGHTNESS:
-					settingsDecrement(nonVolatileSettings.displayBacklightPercentage,
-							(int8_t) ((nonVolatileSettings.displayBacklightPercentage <= BACKLIGHT_PERCENTAGE_STEP) ? 1 : BACKLIGHT_PERCENTAGE_STEP));
-
-					if (nonVolatileSettings.displayBacklightPercentage < 0)
+#if defined(HAS_COLOURS)
+				case DISPLAY_TYPE_STYLE:
+					if (settingsIsOptionBitSet(BIT_UI_USES_DOUBLE_HEIGHT))
 					{
-						settingsSet(nonVolatileSettings.displayBacklightPercentage, 0);
+						settingsSetOptionBit(BIT_UI_USES_DOUBLE_HEIGHT, false);
+					}
+					break;
+#endif
+
+				case DISPLAY_MENU_BRIGHTNESS:
+					settingsDecrement(nonVolatileSettings.displayBacklightPercentage[DAY],
+							(int8_t) ((nonVolatileSettings.displayBacklightPercentage[DAY] <= BACKLIGHT_PERCENTAGE_STEP) ? 1 : BACKLIGHT_PERCENTAGE_STEP));
+
+					if (nonVolatileSettings.displayBacklightPercentage[DAY] < BACKLIGHT_MIN_USABLE_VALUE)
+					{
+						settingsSet(nonVolatileSettings.displayBacklightPercentage[DAY], BACKLIGHT_MIN_USABLE_VALUE);
 					}
 
 					checkMinBacklightValue();
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+					displayLightTrigger(true);
+#endif
 					break;
+
 				case DISPLAY_MENU_BRIGHTNESS_OFF:
 					settingsDecrement(nonVolatileSettings.displayBacklightPercentageOff,
 							(int8_t) ((nonVolatileSettings.displayBacklightPercentageOff <= BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP));
@@ -527,13 +770,16 @@ static void handleEvent(uiEvent_t *ev)
 						gpioSetDisplayBacklightIntensityPercentage(nonVolatileSettings.displayBacklightPercentageOff);
 					}
 					break;
+
+#if ! (defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
 				case DISPLAY_MENU_CONTRAST:
 					if (nonVolatileSettings.displayContrast > CONTRAST_MIN_VALUE)
 					{
 						settingsDecrement(nonVolatileSettings.displayContrast, 1);
 					}
-					ucSetContrast(nonVolatileSettings.displayContrast);
+					displaySetContrast(nonVolatileSettings.displayContrast);
 					break;
+#endif
 				case DISPLAY_MENU_BACKLIGHT_MODE:
 					if (nonVolatileSettings.backlightMode > BACKLIGHT_MODE_AUTO)
 					{
@@ -541,6 +787,7 @@ static void handleEvent(uiEvent_t *ev)
 						updateBacklightMode(nonVolatileSettings.backlightMode);
 					}
 					break;
+
 				case DISPLAY_MENU_TIMEOUT:
 					if (((nonVolatileSettings.backlightMode == BACKLIGHT_MODE_AUTO)
 							&& (nonVolatileSettings.backLightTimeout >= BACKLIGHT_TIMEOUT_STEP)) ||
@@ -550,38 +797,125 @@ static void handleEvent(uiEvent_t *ev)
 						settingsDecrement(nonVolatileSettings.backLightTimeout, (uint8_t) BACKLIGHT_TIMEOUT_STEP);
 					}
 					break;
-				case DISPLAY_MENU_COLOUR_INVERT:
+
+				case DISPLAY_MENU_SCREEN_INVERT:
 					setDisplayInvert(false);
 					break;
+
+#if ! defined(PLATFORM_GD77S)
+				case DISPLAY_AUTO_NIGHT:
+					if (settingsIsOptionBitSet(BIT_AUTO_NIGHT))
+					{
+						settingsSetOptionBit(BIT_AUTO_NIGHT, false);
+					}
+					break;
+
+				case DISPLAY_MENU_BRIGHTNESS_NIGHT:
+					settingsDecrement(nonVolatileSettings.displayBacklightPercentage[NIGHT],
+							(int8_t) ((nonVolatileSettings.displayBacklightPercentage[NIGHT] <= BACKLIGHT_PERCENTAGE_STEP) ? 1 : BACKLIGHT_PERCENTAGE_STEP));
+
+					if (nonVolatileSettings.displayBacklightPercentage[NIGHT] < BACKLIGHT_MIN_USABLE_VALUE)
+					{
+						settingsSet(nonVolatileSettings.displayBacklightPercentage[NIGHT], BACKLIGHT_MIN_USABLE_VALUE);
+					}
+
+					checkMinBacklightValue();
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+					displayLightTrigger(true);
+#endif
+					break;
+#endif
 				case DISPLAY_MENU_CONTACT_DISPLAY_ORDER:
 					if (nonVolatileSettings.contactDisplayPriority > CONTACT_DISPLAY_PRIO_CC_DB_TA)
 					{
 						settingsDecrement(nonVolatileSettings.contactDisplayPriority, 1);
 					}
 					break;
+
 				case DISPLAY_MENU_CONTACT_DISPLAY_SPLIT_CONTACT:
 					if (nonVolatileSettings.splitContact > SPLIT_CONTACT_SINGLE_LINE_ONLY)
 					{
 						settingsDecrement(nonVolatileSettings.splitContact, 1);
 					}
 					break;
+
+#if defined(HAS_COLOURS) || defined(PLATFORM_MD9600)
+				case DISPLAY_TIME_IN_HEADER:
+					if (settingsIsOptionBitSet(BIT_DISPLAY_TIME_IN_HEADER))
+					{
+						settingsSetOptionBit(BIT_DISPLAY_TIME_IN_HEADER, false);
+					}
+					break;
+#endif
+
+#if ! defined(PLATFORM_MD9600)
 				case DISPLAY_BATTERY_UNIT_IN_HEADER:
 					if (settingsIsOptionBitSet(BIT_BATTERY_VOLTAGE_IN_HEADER))
 					{
 						settingsSetOptionBit(BIT_BATTERY_VOLTAGE_IN_HEADER, false);
 					}
 					break;
+#endif
 				case DISPLAY_EXTENDED_INFOS:
 					if (nonVolatileSettings.extendedInfosOnScreen > INFO_ON_SCREEN_OFF)
 					{
 						settingsDecrement(nonVolatileSettings.extendedInfosOnScreen, 1);
 					}
 					break;
+
+#if defined(HAS_SOFT_VOLUME)
+				case DISPLAY_VISUAL_VOLUME:
+					if (settingsIsOptionBitSet(BIT_VISUAL_VOLUME))
+					{
+						settingsSetOptionBit(BIT_VISUAL_VOLUME, false);
+					}
+					break;
+#endif
+
+#if ! defined(PLATFORM_MD9600)
 				case DISPLAY_ALL_LEDS_ENABLED:
 					if (settingsIsOptionBitSet(BIT_ALL_LEDS_DISABLED) == false)
 					{
-						GPIO_PinWrite(GPIO_LEDgreen, Pin_LEDgreen, 0);
+						LedWriteDirect(LED_GREEN, 0);
 						settingsSetOptionBit(BIT_ALL_LEDS_DISABLED, true);
+					}
+					break;
+#endif
+				case DISPLAY_TIMEZONE_VALUE:
+					{
+						int tz = (nonVolatileSettings.timezone & 0x7F);
+
+						if (BUTTONCHECK_DOWN(ev, BUTTON_SK2))
+						{
+							tz--;
+						}
+						else
+						{
+							tz -= 4;
+						}
+
+						if (tz >= ((-12 * 4) + SETTINGS_TIMEZONE_UTC))
+						{
+							settingsSet(nonVolatileSettings.timezone, ((nonVolatileSettings.timezone & ~0x7F) + tz));
+						}
+					}
+					break;
+
+				case DISPLAY_TIME_UTC_OR_LOCAL:
+					settingsSet(nonVolatileSettings.timezone, (uint8_t) (nonVolatileSettings.timezone | 0x80));
+					break;
+
+				case DISPLAY_SHOW_DISTANCE:
+					if (settingsIsOptionBitSet(BIT_DISPLAY_CHANNEL_DISTANCE))
+					{
+						settingsSetOptionBit(BIT_DISPLAY_CHANNEL_DISTANCE, false);
+					}
+					break;
+
+				case DISPLAY_DMR_LAST_TALKER_ON_SCREEN:
+					if (nonVolatileSettings.lastTalkerOnScreenTimer > 0U)
+					{
+						settingsDecrement(nonVolatileSettings.lastTalkerOnScreenTimer, 1U);
 					}
 					break;
 			}
@@ -595,32 +929,11 @@ static void handleEvent(uiEvent_t *ev)
 		}
 	}
 
-	if ((ev->events & KEY_EVENT) && (menuDataGlobal.menuOptionsSetQuickkey != 0) && (menuDataGlobal.menuOptionsTimeout == 0))
+	if (uiQuickKeysIsStoring(ev))
 	{
-		if (KEYCHECK_SHORTUP(ev->keys, KEY_RED))
-		{
-			menuDataGlobal.menuOptionsSetQuickkey = 0;
-			menuDataGlobal.menuOptionsTimeout = 0;
-			menuDisplayOptionsExitCode |= MENU_STATUS_ERROR;
-		}
-		else if (KEYCHECK_SHORTUP(ev->keys, KEY_GREEN))
-		{
-			saveQuickkeyMenuIndex(menuDataGlobal.menuOptionsSetQuickkey, menuSystemGetCurrentMenuNumber(), menuDataGlobal.currentItemIndex, 0);
-			menuDataGlobal.menuOptionsSetQuickkey = 0;
-		}
-		else if (KEYCHECK_SHORTUP(ev->keys, KEY_LEFT))
-		{
-			saveQuickkeyMenuIndex(menuDataGlobal.menuOptionsSetQuickkey, menuSystemGetCurrentMenuNumber(), menuDataGlobal.currentItemIndex, FUNC_LEFT);
-			menuDataGlobal.menuOptionsSetQuickkey = 0;
-		}
-		else if (KEYCHECK_SHORTUP(ev->keys, KEY_RIGHT))
-		{
-			saveQuickkeyMenuIndex(menuDataGlobal.menuOptionsSetQuickkey, menuSystemGetCurrentMenuNumber(), menuDataGlobal.currentItemIndex, FUNC_RIGHT);
-			menuDataGlobal.menuOptionsSetQuickkey = 0;
-		}
+		uiQuickKeysStore(ev, &menuDisplayOptionsExitCode);
 		isDirty = true;
 	}
-
 
 	if (isDirty)
 	{
@@ -636,7 +949,9 @@ static void updateBacklightMode(uint8_t mode)
 	{
 		case BACKLIGHT_MODE_MANUAL:
 		case BACKLIGHT_MODE_NONE:
-			displayEnableBacklight(false); // Could be MANUAL previously, but in OFF state, so turn it OFF blindly.
+#if ! (defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017))
+			displayEnableBacklight(false, nonVolatileSettings.displayBacklightPercentageOff); // Could be MANUAL previously, but in OFF state, so turn it OFF blindly.
+#endif
 			break;
 		case BACKLIGHT_MODE_SQUELCH:
 		case BACKLIGHT_MODE_BUTTONS:
@@ -658,15 +973,160 @@ static void setDisplayInvert(bool invert)
 	}
 
 	settingsSetOptionBit(BIT_INVERSE_VIDEO, invert);
-	displayInit(settingsIsOptionBitSet(BIT_INVERSE_VIDEO));// Need to perform a full reset on the display to change back to non-inverted
+	// Need to perform a full reset on the display to change back to non-inverted
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+	displaySetInvertedState(settingsIsOptionBitSet(BIT_INVERSE_VIDEO));
+#else
+	displayInit(settingsIsOptionBitSet(BIT_INVERSE_VIDEO));
+#endif
 }
 
 static void checkMinBacklightValue(void)
 {
-	if (nonVolatileSettings.displayBacklightPercentageOff >= nonVolatileSettings.displayBacklightPercentage)
+	if ((nonVolatileSettings.displayBacklightPercentageOff >= nonVolatileSettings.displayBacklightPercentage[DAY]) ||
+			(nonVolatileSettings.displayBacklightPercentageOff >= nonVolatileSettings.displayBacklightPercentage[NIGHT]))
 	{
+		int8_t minBCL = SAFE_MIN(nonVolatileSettings.displayBacklightPercentage[DAY], nonVolatileSettings.displayBacklightPercentage[NIGHT]);
+
 		settingsSet(nonVolatileSettings.displayBacklightPercentageOff,
-				(int8_t) (nonVolatileSettings.displayBacklightPercentage ?
-						(nonVolatileSettings.displayBacklightPercentage - ((nonVolatileSettings.displayBacklightPercentageOff <= BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP)) : 0));
+				(int8_t) (minBCL ? (minBCL - ((nonVolatileSettings.displayBacklightPercentageOff <= BACKLIGHT_PERCENTAGE_STEP) ? BACKLIGHT_PERCENTAGE_STEP_SMALL : BACKLIGHT_PERCENTAGE_STEP)) : 0));
+	}
+}
+
+static void buildTimeZoneBufferText(char *buffer)
+{
+	int tz 		    = (nonVolatileSettings.timezone & 0x7F);
+	int hoursPart 	= abs((tz - SETTINGS_TIMEZONE_UTC) / 4);
+	int minutesPart = 15 * abs(tz % 4);// optimisation . No need to subtract the SETTINGS_TIMEZONE_UTC as we just extra act the modulus 4 part.
+
+	snprintf(buffer, SCREEN_LINE_BUFFER_SIZE, "%c%2u:%02u", (tz >= SETTINGS_TIMEZONE_UTC) ? '+' : '-', abs(hoursPart), minutesPart);
+}
+
+static void applySettings(void)
+{
+	// Reset last heard list, otherwise entries won't get updated, accordingly to the new setting value
+	if (nonVolatileSettings.contactDisplayPriority != originalNonVolatileSettings.contactDisplayPriority)
+	{
+		lastHeardInitList();
+	}
+
+	// if auto night is enabled, disable override
+	if (settingsIsOptionBitSet(BIT_AUTO_NIGHT) && settingsIsOptionBitSet(BIT_AUTO_NIGHT_OVERRIDE))
+	{
+		settingsSetOptionBit(BIT_AUTO_NIGHT_OVERRIDE, false);
+		uiDataGlobal.daytimeOverridden = UNDEFINED;
+	}
+	else if ((settingsIsOptionBitSet(BIT_AUTO_NIGHT) == false) && (uiDataGlobal.daytimeOverridden != UNDEFINED))
+	{
+		settingsSetOptionBit(BIT_AUTO_NIGHT_OVERRIDE, true);
+		settingsSetOptionBit(BIT_AUTO_NIGHT_DAYTIME, (uiDataGlobal.daytimeOverridden == NIGHT));
+	}
+
+	if (nonVolatileSettings.lastTalkerOnScreenTimer != originalNonVolatileSettings.lastTalkerOnScreenTimer)
+	{
+		if (nonVolatileSettings.lastTalkerOnScreenTimer == 0)
+		{
+			ticksTimerReset(&uiDataGlobal.DMRLastTalkerOnScreen.timer);
+		}
+		else
+		{
+			ticksTimerStart(&uiDataGlobal.DMRLastTalkerOnScreen.timer, (nonVolatileSettings.lastTalkerOnScreenTimer * 1000U));
+		}
+
+		uiDataGlobal.DMRLastTalkerOnScreen.visible = false;
+	}
+
+#if ! defined(PLATFORM_GD77S)
+	daytimeThemeApply(DAYTIME_CURRENT);
+	daytimeThemeChangeUpdate(true);
+#endif
+	// All parameters has already been applied
+	settingsSaveIfNeeded(true);
+	resetOriginalSettingsData();
+}
+
+static void exitCallback(void *data)
+{
+	if (originalNonVolatileSettings.magicNumber != 0xDEADBEEF)
+	{
+		bool displayIsLit = displayIsBacklightLit();
+
+		if (nonVolatileSettings.displayContrast != originalNonVolatileSettings.displayContrast)
+		{
+			settingsSet(nonVolatileSettings.displayContrast, originalNonVolatileSettings.displayContrast);
+			displaySetContrast(nonVolatileSettings.displayContrast);
+		}
+
+		if (settingsIsOptionBitSet(BIT_INVERSE_VIDEO) != settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, BIT_INVERSE_VIDEO))
+		{
+			settingsSetOptionBit(BIT_INVERSE_VIDEO, settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, BIT_INVERSE_VIDEO));
+			// Need to perform a full reset on the display to change back to non-inverted
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+			displaySetInvertedState(settingsIsOptionBitSet(BIT_INVERSE_VIDEO));
+#else
+			displayInit(settingsIsOptionBitSet(BIT_INVERSE_VIDEO));
+#endif
+		}
+
+		settingsSet(nonVolatileSettings.displayBacklightPercentage[DAY], originalNonVolatileSettings.displayBacklightPercentage[DAY]);
+		settingsSet(nonVolatileSettings.displayBacklightPercentage[NIGHT], originalNonVolatileSettings.displayBacklightPercentage[NIGHT]);
+		settingsSet(nonVolatileSettings.displayBacklightPercentageOff, originalNonVolatileSettings.displayBacklightPercentageOff);
+		settingsSet(nonVolatileSettings.backLightTimeout, originalNonVolatileSettings.backLightTimeout);
+
+		if (nonVolatileSettings.backlightMode != originalNonVolatileSettings.backlightMode)
+		{
+			updateBacklightMode(originalNonVolatileSettings.backlightMode);
+		}
+
+		if ((nonVolatileSettings.backlightMode == BACKLIGHT_MODE_MANUAL) && (!displayIsLit))
+		{
+			gpioSetDisplayBacklightIntensityPercentage(nonVolatileSettings.displayBacklightPercentageOff);
+		}
+
+		settingsSet(nonVolatileSettings.contactDisplayPriority, originalNonVolatileSettings.contactDisplayPriority);
+		settingsSet(nonVolatileSettings.splitContact, originalNonVolatileSettings.splitContact);
+		settingsSet(nonVolatileSettings.extendedInfosOnScreen, originalNonVolatileSettings.extendedInfosOnScreen);
+		settingsSet(nonVolatileSettings.lastTalkerOnScreenTimer, originalNonVolatileSettings.lastTalkerOnScreenTimer);
+
+		if (settingsIsOptionBitSet(BIT_ALL_LEDS_DISABLED) != settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, BIT_ALL_LEDS_DISABLED))
+		{
+			uint8_t state = LedRead(LED_GREEN);
+
+			settingsSetOptionBit(BIT_ALL_LEDS_DISABLED, settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, BIT_ALL_LEDS_DISABLED));
+			LedWriteDirect(LED_GREEN, (settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, BIT_ALL_LEDS_DISABLED) ? 0 : state));
+		}
+
+		// Restore settings bits, if changed.
+		bitfieldOptions_t settingsBits[] =
+		{
+#if defined(HAS_COLOURS) || defined(PLATFORM_MD9600)
+				BIT_DISPLAY_TIME_IN_HEADER,
+#endif
+#if ! defined(PLATFORM_MD9600)
+				BIT_BATTERY_VOLTAGE_IN_HEADER,
+#endif
+#if defined(HAS_SOFT_VOLUME)
+				BIT_VISUAL_VOLUME,
+#endif
+#if defined(HAS_COLOURS)
+				BIT_UI_USES_DOUBLE_HEIGHT,
+#endif
+				BIT_AUTO_NIGHT,
+				BIT_DISPLAY_CHANNEL_DISTANCE,
+		};
+
+		for (size_t i = 0U; i < ARRAY_SIZE(settingsBits); i++)
+		{
+			if (settingsIsOptionBitSet(settingsBits[i]) != settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, settingsBits[i]))
+			{
+				settingsSetOptionBit(settingsBits[i], settingsIsOptionBitSetFromSettings(&originalNonVolatileSettings, settingsBits[i]));
+			}
+		}
+
+#if defined(PLATFORM_RD5R)
+		settingsSetDirty();
+#endif
+		settingsSaveIfNeeded(true);
+		resetOriginalSettingsData();
 	}
 }

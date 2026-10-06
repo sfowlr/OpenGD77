@@ -1,20 +1,30 @@
 /*
- * Copyright (C)2019 	Roger Clark, VK3KYY / G4KYF
- * 				and		Kai Ludwig, DG4KLU
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 
 #ifndef _OPENGD77_SETTINGS_H_
@@ -22,6 +32,7 @@
 
 #include "functions/codeplug.h"
 #include "functions/trx.h"
+#include "utils.h"
 
 enum USB_MODE { USB_MODE_CPS, USB_MODE_HOTSPOT, USB_MODE_DEBUG };
 enum SETTINGS_UI_MODE { SETTINGS_CHANNEL_MODE = 0, SETTINGS_VFO_A_MODE, SETTINGS_VFO_B_MODE };
@@ -34,75 +45,206 @@ enum ALLOW_PRIVATE_CALLS_MODE { ALLOW_PRIVATE_CALLS_OFF = 0, ALLOW_PRIVATE_CALLS
 enum BAND_LIMITS_ENUM { BAND_LIMITS_NONE = 0 , BAND_LIMITS_ON_LEGACY_DEFAULT, BAND_LIMITS_FROM_CPS };
 enum INFO_ON_SCREEN { INFO_ON_SCREEN_OFF = 0x00, INFO_ON_SCREEN_TS = 0x01, INFO_ON_SCREEN_PWR = 0x02, INFO_ON_SCREEN_BOTH = 0x03 };
 
-extern const int ECO_LEVEL_MAX;
-extern const uint8_t BEEP_TX_NONE;
-extern const uint8_t BEEP_TX_START;
-extern const uint8_t BEEP_TX_STOP;
-
-extern int settingsCurrentChannelNumber;
-extern int *nextKeyBeepMelody;
-extern struct_codeplugChannel_t settingsVFOChannel[2];
-extern struct_codeplugGeneralSettings_t settingsCodeplugGeneralSettings;
+#if defined(HAS_GPS)
+#define SETTINGS_GPS_MODE_GET(x) ((x).gpsModeAndBaudsIndex & 0x0F)
+#define SETTINGS_GPS_BAUDRATE_GET(x) (((x).gpsModeAndBaudsIndex & 0xF0) >> 4)
+#define SETTINGS_GPS_MODE_SET(x, m) (((x).gpsModeAndBaudsIndex & 0xF0) | ((m) & 0x0F))
+#define SETTINGS_GPS_BAUDRATE_SET(x, b) ((((b) & 0x0F) << 4) | ((x).gpsModeAndBaudsIndex & 0x0F))
 
 typedef enum
 {
-	BIT_INVERSE_VIDEO               = (1 << 0),
-	BIT_PTT_LATCH                   = (1 << 1),
-	BIT_TRANSMIT_TALKER_ALIAS       = (1 << 2),
-	BIT_BATTERY_VOLTAGE_IN_HEADER   = (1 << 3),
-	BIT_SETTINGS_UPDATED            = (1 << 4),
-	BIT_TX_RX_FREQ_LOCK             = (1 << 5),
-	BIT_ALL_LEDS_DISABLED           = (1 << 6)
+	GPS_NOT_DETECTED,
+	GPS_MODE_OFF,
+	GPS_MODE_ON,
+	GPS_MODE_ON_NMEA,
+#if defined(LOG_GPS_DATA)
+	GPS_MODE_ON_LOG,
+#endif
+	NUM_GPS_MODES,
+} gpsMode_t;
+#endif
+
+typedef enum
+{
+	ROAMING_OFF     = 0U,
+	ROAMING_MANUAL,
+	ROAMING_5KM,
+	ROAMING_10KM,
+	ROAMING_20KM,
+	ROAMING_MAX_NUM
+} roaming_t;
+
+#define ECO_LEVEL_MAX          5
+
+#define SETTINGS_TIMEZONE_UTC 64
+#define SETTINGS_UNITIALISED_LOCATION_LAT	0x7F000000U
+
+// Bit patterns for DMR Beep
+#define BEEP_TX_NONE             0x00
+#define BEEP_TX_START            0x01
+#define BEEP_TX_STOP             0x02
+#define BEEP_RX_CARRIER          0x04
+#define BEEP_RX_TALKER           0x08
+#define BEEP_RX_TALKER_BEGIN     0x10
+
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+#define SETTINGS_DMR_MIC_ZERO	11U
+#define SETTINGS_FM_MIC_ZERO	16U
+#elif defined(PLATFORM_MD9600)
+#define SETTINGS_DMR_MIC_ZERO	 8U
+#define SETTINGS_FM_MIC_ZERO	 6U
+#else
+#define SETTINGS_DMR_MIC_ZERO	 5U
+#define SETTINGS_FM_MIC_ZERO	 4U
+#endif
+
+#define LOCATION_DECIMAL_PART_MULIPLIER_FIXED_32 100000
+#define LOCATION_DECIMAL_PART_MULIPLIER_FIXED_32_DOUBLE 1E-5
+#define LOCATION_DECIMAL_PART_MULIPLIER_FIXED_24 10000
+#define LOCATION_DECIMAL_PART_MULIPLIER_FIXED_24_DOUBLE 1E-4
+
+extern int settingsCurrentChannelNumber;
+extern int16_t *nextKeyBeepMelody;
+extern CodeplugChannel_t settingsVFOChannel[2];
+extern CodeplugGeneralSettings_t settingsCodeplugGeneralSettings;
+
+#define SETTINGS_BITS_NUMBER_OF_BANKS 1U // Number of settings bits banks (max 4)
+// bits #30 to #31 are used for storage bank index, settings bits are using the first 30 bits (#29 to #0)
+#define SETTINGS_BITS_ARRAY_BANK(x) (((x) & 0xC0000000) >> 30)
+#define SETTINGS_BITS_ARRAY_VALUE(x) ((x) & ~0xC0000000)
+#define SETTINGS_BITS_BANK_0 (0 << 30) // 1
+#if (SETTINGS_BITS_NUMBER_OF_BANKS >= 2U)
+  #define SETTINGS_BITS_BANK_1 (1 << 30) // 2
+  #if (SETTINGS_BITS_NUMBER_OF_BANKS >= 3U)
+    #define SETTINGS_BITS_BANK_2 (2 << 30) // 3
+    #if (SETTINGS_BITS_NUMBER_OF_BANKS == 4U)
+      #define SETTINGS_BITS_BANK_3 (3 << 30) // 4
+    #else
+      #error settings banks max value is 4
+    #endif
+  #endif
+#endif
+
+typedef enum
+{
+	BIT_INVERSE_VIDEO               	= (SETTINGS_BITS_BANK_0 | (1 << 0)),
+	BIT_PTT_LATCH                   	= (SETTINGS_BITS_BANK_0 | (1 << 1)),
+	BIT_UNUSED_1				       	= (SETTINGS_BITS_BANK_0 | (1 << 2)),
+	BIT_BATTERY_VOLTAGE_IN_HEADER   	= (SETTINGS_BITS_BANK_0 | (1 << 3)),
+	BIT_SETTINGS_UPDATED            	= (SETTINGS_BITS_BANK_0 | (1 << 4)),
+	BIT_TX_RX_FREQ_LOCK             	= (SETTINGS_BITS_BANK_0 | (1 << 5)),
+	BIT_ALL_LEDS_DISABLED           	= (SETTINGS_BITS_BANK_0 | (1 << 6)),
+	BIT_SCAN_ON_BOOT_ENABLED        	= (SETTINGS_BITS_BANK_0 | (1 << 7)),
+	BIT_POWEROFF_SUSPEND            	= (SETTINGS_BITS_BANK_0 | (1 << 8)),
+	BIT_SATELLITE_MANUAL_AUTO       	= (SETTINGS_BITS_BANK_0 | (1 << 9)),
+	BIT_DMR_CRC_IGNORED             	= (SETTINGS_BITS_BANK_0 | (1 << 10)),
+	BIT_SAFE_POWER_ON               	= (SETTINGS_BITS_BANK_0 | (1 << 11)),
+	BIT_APO_WITH_RF                 	= (SETTINGS_BITS_BANK_0 | (1 << 12)),
+	BIT_AUTO_NIGHT        	        	= (SETTINGS_BITS_BANK_0 | (1 << 13)),
+	BIT_AUTO_NIGHT_OVERRIDE         	= (SETTINGS_BITS_BANK_0 | (1 << 14)),
+	BIT_AUTO_NIGHT_DAYTIME          	= (SETTINGS_BITS_BANK_0 | (1 << 15)),
+#if defined(HAS_SOFT_VOLUME)
+	BIT_VISUAL_VOLUME               	= (SETTINGS_BITS_BANK_0 | (1 << 16)),
+#endif
+	BIT_SECONDARY_LANGUAGE          	= (SETTINGS_BITS_BANK_0 | (1 << 17)),
+	BIT_SORT_CHANNEL_DISTANCE       	= (SETTINGS_BITS_BANK_0 | (1 << 18)),
+	BIT_DISPLAY_CHANNEL_DISTANCE   		= (SETTINGS_BITS_BANK_0 | (1 << 19)),
+	BIT_TX_INHIBIT                     	= (SETTINGS_BITS_BANK_0 | (1 << 20)),
+#if defined(HAS_COLOURS) || defined(PLATFORM_MD9600)
+	BIT_DISPLAY_TIME_IN_HEADER         	= (SETTINGS_BITS_BANK_0 | (1 << 21)),
+#endif
+	BIT_CHANNELS_ARE_READ_ONLY      	= (SETTINGS_BITS_BANK_0 | (1 << 22)),
+	BIT_UI_USES_DOUBLE_HEIGHT    		= (SETTINGS_BITS_BANK_0 | (1 << 23)),
+
+	// Last usable bit is 29
+	//BIT_xxxxxxx_xxxxxxxxxxxx          = (SETTINGS_BITS_BANK_1 | (1 << 0)),
+	//BIT_xxxxxxx_xxxxxxxxxxxx          = (SETTINGS_BITS_BANK_2 | (1 << 0)),
+	//BIT_xxxxxxx_xxxxxxxxxxxx          = (SETTINGS_BITS_BANK_3 | (1 << 0)),
 } bitfieldOptions_t;
 
 typedef struct
 {
-	int 			magicNumber;
-	uint32_t		overrideTG;
-	uint32_t		vfoScanLow[2]; // low frequency for VFO Scanning
-	uint32_t		vfoScanHigh[2]; // High frequency for VFO Scanning
-	int16_t			currentChannelIndexInZone;
-	int16_t			currentChannelIndexInAllZone;
-	int16_t			currentIndexInTRxGroupList[3]; // Current Channel, VFO A and VFO B
-	int16_t			currentZone;
-	uint16_t		keypadTimerLong;
-	uint16_t		keypadTimerRepeat;
-	uint16_t		userPower;
-	uint16_t		bitfieldOptions; // see bitfieldOptions_t
-	uint8_t			txPowerLevel;
-	uint8_t			txTimeoutBeepX5Secs;
-	uint8_t			beepVolumeDivider;
-	uint8_t			beepOptions;
-	uint8_t			micGainDMR;
-	uint8_t			micGainFM;
-	uint8_t			backlightMode; // see BACKLIGHT_MODE enum
-	uint8_t			backLightTimeout; // 0 = never timeout. 1 - 255 time in seconds
-	int8_t			displayContrast;
-	int8_t			displayBacklightPercentage;
-	int8_t			displayBacklightPercentageOff; // backlight level when "off"
-	uint8_t			initialMenuNumber;
-	uint8_t			extendedInfosOnScreen;
-	uint8_t			txFreqLimited;
-	uint8_t			scanModePause;
-	uint8_t			scanDelay;
-	uint8_t			scanStepTime;
-	uint8_t			squelchDefaults[RADIO_BANDS_TOTAL_NUM]; // VHF, 200Mhz and UHF
-	uint8_t			currentVFONumber;
-	uint16_t		tsManualOverride;
-	uint8_t			dmrDestinationFilter;
-	uint8_t			dmrCaptureTimeout;
-	uint8_t			dmrCcTsFilter;
-	uint8_t			analogFilterLevel;
-	uint8_t			languageIndex;
-	uint8_t			hotspotType;
-	uint8_t    		privateCalls;
-	uint8_t			contactDisplayPriority;
-	uint8_t			splitContact;
-	uint8_t			voxThreshold; // 0: disabled
-	uint8_t			voxTailUnits; // 500ms units
-	uint8_t			audioPromptMode;
-	int8_t			temperatureCalibration;// Units of 0.5 deg C
-	uint8_t			ecoLevel;// Power saving / economy level
+	uint32_t   lat; // fixed point encoded as 1 sign bit, 8 bits integer, 23 bits as decimal
+	uint32_t   lon; // fixed point encoded as 1 sign bit, 8 bits integer, 23 bits as decimal
+} settingsLocation_t;
+
+typedef struct
+{
+	uint32_t 			magicNumber;
+	// The following settings won't be reset default from magicNumber 0x4761
+	settingsLocation_t 	location;
+	uint8_t				timezone;// Lower 7 bits are the timezone. 64 = UTC, values < 64 are negative TZ values.  Bit 8 is a flag which indicates TZ/UTC. 0 = UTC
+	// -----------------------------------------------
+	uint8_t				beepOptions; // 2 pairs of bits + 1 (TX and RX beeps)
+	uint16_t			vfoSweepSettings; // 3bits: channel step | 5 bits: RSSI noise floor | 7bits: gain
+	uint32_t			overrideTG;
+	uint32_t			vfoScanLow[2]; // low frequency for VFO Scanning
+	uint32_t			vfoScanHigh[2]; // High frequency for VFO Scanning
+	uint32_t			bitfieldOptions[SETTINGS_BITS_NUMBER_OF_BANKS]; // see bitfieldOptions_t
+	uint32_t			aprsBeaconingSettingsPart1[2];
+#if defined(LOG_GPS_DATA)
+	uint32_t			gpsLogMemOffset; // Current offset from the NMEA logging flash memory address start.
+#endif
+	int16_t				currentIndexInTRxGroupList[3]; // Current Channel, VFO A and VFO B
+	int16_t				currentZone;
+	uint16_t			userPower;
+	uint16_t			tsManualOverride;
+#if (defined(PLATFORM_RD5R) || defined(PLATFORM_MD9600))
+	int16_t				currentChannelIndexInZone;
+	int16_t				currentChannelIndexInAllZone;
+#else // These two has to be used on any platform but RD5R and MD-9600
+	int16_t				UNUSED_1;
+	int16_t				UNUSED_2;
+#endif
+	uint16_t			aprsBeaconingSettingsPart2;
+	uint8_t				txPowerLevel;
+	uint8_t				txTimeoutBeepX5Secs;
+	uint8_t				beepVolumeDivider;
+	uint8_t				micGainDMR;
+	uint8_t				micGainFM;
+	uint8_t				backlightMode; // see BACKLIGHT_MODE enum
+	uint8_t				backLightTimeout; // 0 = never timeout. 1 - 255 time in seconds
+	int8_t				displayContrast;
+	int8_t				displayBacklightPercentage[NIGHT + 1];
+	int8_t				displayBacklightPercentageOff; // backlight level when "off"
+	uint8_t				initialMenuNumber;
+	uint8_t				extendedInfosOnScreen;
+	uint8_t				txFreqLimited;
+	uint8_t				scanModePause;
+	uint8_t				scanDelay;
+	uint8_t				dmrRxAGC;
+	uint8_t				hotspotType;
+	uint8_t				scanStepTime;
+	uint8_t				currentVFONumber;
+	uint8_t				dmrDestinationFilter;
+	uint8_t				dmrCaptureTimeout;
+	uint8_t				dmrCcTsFilter;
+	uint8_t				analogFilterLevel;
+	uint8_t    			privateCalls;
+	uint8_t				contactDisplayPriority;
+	uint8_t				splitContact;
+	uint8_t				voxThreshold; // 0: disabled
+	uint8_t				voxTailUnits; // 500ms units
+	uint8_t				audioPromptMode;
+	int8_t				temperatureCalibration;// Units of 0.5 deg C
+	uint8_t				batteryCalibration; // Units of 0.01V (NOTE: only the 4 lower bits are used)
+	uint8_t				squelchDefaults[RADIO_BANDS_TOTAL_NUM]; // VHF, 200 and UHF
+	uint8_t				ecoLevel;// Power saving / economy level
+	uint8_t				apo; // unit: 30 minutes (max 24 => 12 hours)
+	uint8_t				keypadTimerLong;
+	uint8_t				keypadTimerRepeat;
+	uint8_t				autolockTimer; // in minutes
+	roaming_t			roaming;
+#if defined(HAS_GPS)
+	// 4 lower bits: gpsMode_t,
+	//
+	// On STM32F405xx only:
+	// 4 higher bits: baudrate index (0U: value is undetected,
+	//                                otherwise value minus 1 is passed to gpsSetBaudRateByIndex())
+	// Use SETTINGS_GPS_*GET/SET macros.
+	uint8_t				gpsModeAndBaudsIndex;
+#endif
+	uint8_t				lastTalkerOnScreenTimer; // in seconds, 0..30
 } settingsStruct_t;
 
 typedef enum DMR_DESTINATION_FILTER_TYPE
@@ -139,10 +281,12 @@ typedef enum AUDIO_PROMPT_MODE
 {
 	AUDIO_PROMPT_MODE_SILENT = 0,
 	AUDIO_PROMPT_MODE_BEEP,
+	AUDIO_PROMPT_MODE_NO_KEY_BEEP,
 	AUDIO_PROMPT_MODE_VOICE_LEVEL_1,
 	AUDIO_PROMPT_MODE_VOICE_LEVEL_2,
 	AUDIO_PROMPT_MODE_VOICE_LEVEL_3 ,
-	NUM_AUDIO_PROMPT_MODES
+	NUM_AUDIO_PROMPT_MODES,
+	AUDIO_PROMPT_MODE_VOICE_THRESHOLD = AUDIO_PROMPT_MODE_VOICE_LEVEL_1
 } audioPromptMode_t;
 
 typedef enum PROMPT_AUTOPLAY_THRESHOLD
@@ -155,23 +299,27 @@ typedef enum PROMPT_AUTOPLAY_THRESHOLD
 
 typedef struct
 {
-	bool 	isEnabled;
-	int 	DMRTimeout;
-	int 	savedRadioMode;
-	uint8_t savedSquelch;
-	int 	savedDMRCcTsFilter;
-	int 	savedDMRDestinationFilter;
-	int 	savedDMRCc;
-	int 	savedDMRTs;
+	volatile bool   triggered;
+	volatile bool	isEnabled;
+	volatile bool	qsoInfoUpdated;
+	volatile bool   dmrIsValid;
+	int				dmrTimeout;
+	uint8_t			dmrFrameSkip;
+	int 			savedRadioMode;
+	uint8_t			savedSquelch;
+	int 			savedDMRCcTsFilter;
+	int 			savedDMRDestinationFilter;
+	uint8_t 		savedDMRCc;
+	int 			savedDMRTs;
 } monitorModeSettingsStruct_t;
 
 extern settingsStruct_t nonVolatileSettings;
-extern struct_codeplugChannel_t *currentChannelData;
-extern struct_codeplugChannel_t channelScreenChannelData;
-extern struct_codeplugContact_t contactListContactData;
-extern struct_codeplugDTMFContact_t contactListDTMFContactData;
+extern CodeplugChannel_t *currentChannelData;
+extern CodeplugChannel_t channelScreenChannelData;
+extern CodeplugContact_t contactListContactData;
+extern CodeplugDTMFContact_t contactListDTMFContactData;
 extern int contactListContactIndex;
-extern int settingsUsbMode;
+extern volatile int settingsUsbMode;
 extern monitorModeSettingsStruct_t monitorModeData;
 
 // Do not use the following settingsSet<TYPE>(...) functions, use settingsSet() instead
@@ -240,17 +388,21 @@ void settingsDecUINT32(uint32_t *s, uint32_t v);
 #endif
 
 void settingsSetOptionBit(bitfieldOptions_t bit, bool set);
+bool settingsIsOptionBitSetFromSettings(settingsStruct_t *sets, bitfieldOptions_t bit);
 bool settingsIsOptionBitSet(bitfieldOptions_t bit);
 
 void settingsSetDirty(void);
 void settingsSetVFODirty(void);
 void settingsSaveIfNeeded(bool immediately);
 bool settingsSaveSettings(bool includeVFOs);
-bool settingsLoadSettings(void);
-void settingsRestoreDefaultSettings(void);
+bool settingsLoadSettings(bool reset);
+bool settingsRestoreDefaultSettings(void);
 void settingsEraseCustomContent(void);
-void settingsInitVFOChannel(int vfoNumber);
-void enableVoicePromptsIfLoaded(void);
+//void settingsInitVFOChannel(int vfoNumber);
+void enableVoicePromptsIfLoaded(bool enableFullPrompts);
 int settingsGetScanStepTimeMilliseconds(void);
+bool settingsLocationIsValid(void);
+double settingsLocationGetLatitude(void);
+double settingsLocationGetLongitude(void);
 
 #endif

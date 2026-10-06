@@ -1,19 +1,31 @@
 /*
- * Copyright (C)2019 Kai Ludwig, DG4KLU
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2019-2020 Alex, DL4LEX
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 
 #ifndef _OPENGD77_KEYBOARD_H_
@@ -24,8 +36,16 @@
 
 #define SCAN_UP     0x00000100
 #define SCAN_DOWN   0x00002000
+#if defined(PLATFORM_RD5R)
+#define SCAN_VFO_MR 0x00000010
+#define SCAN_BAND   0x00000200
+#define SCAN_A_B    0x00004000
+#define SCAN_LEFT   SCAN_A_B
+#define SCAN_RIGHT  SCAN_BAND
+#else
 #define SCAN_LEFT   0x00000200
 #define SCAN_RIGHT  0x00000010
+#endif
 #define SCAN_GREEN  0x00000008
 #define SCAN_RED    0x00040000
 #define SCAN_0      0x00010000
@@ -48,7 +68,7 @@
 #define KEY_LEFT         3
 #define KEY_RIGHT        4
 
-#if defined(PLATFORM_DM1801) || defined(PLATFORM_RD5R)
+#if defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
 #define KEY_VFO_MR       5
 #define KEY_A_B          6
 #endif
@@ -80,26 +100,38 @@
 
 #define KEY_DEBOUNCE_COUNTER   20
 
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+#if defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+#define KEY_INCREASE KEY_RIGHT
+#define KEY_DECREASE KEY_LEFT
+#else
+#define KEY_INCREASE KEY_FRONT_UP
+#define KEY_DECREASE KEY_FRONT_DOWN
+#endif
+#elif defined(PLATFORM_MD9600)
+#define KEY_INCREASE KEY_RIGHT
+#define KEY_DECREASE KEY_LEFT
+#else
+#define KEY_INCREASE KEY_RIGHT
+#define KEY_DECREASE KEY_LEFT
+#endif
+
 //#define KEYCHECK(keys,k) (((keys) & 0xffffff) == (k))
 //#define KEYCHECK_KEYMOD(keys, k, mask, mod) (((((keys) & 0xffffff) == (k)) && ((keys) & (mask)) == (mod)))
 //#define KEYCHECK_MOD(keys, mask, mod) (((keys) & (mask)) == (mod))
 
-#define KEYCHECK_UP(keys, k)              ((keys.key == k) && ((keys.event & KEY_MOD_UP) == KEY_MOD_UP))
+#define KEYCHECK_UP(keys, k)              ((keys.key == k) && (keys.event & KEY_MOD_UP))
 #define KEYCHECK_SHORTUP(keys, k)         ((keys.key == k) && ((keys.event & (KEY_MOD_UP | KEY_MOD_LONG)) == KEY_MOD_UP))
-#define KEYCHECK_DOWN(keys, k)            ((keys.key == k) && ((keys.event & KEY_MOD_DOWN) == KEY_MOD_DOWN))
-#define KEYCHECK_PRESS(keys, k)           ((keys.key == k) && ((keys.event & KEY_MOD_PRESS) == KEY_MOD_PRESS))
+#define KEYCHECK_DOWN(keys, k)            ((keys.key == k) && (keys.event & KEY_MOD_DOWN))
+#define KEYCHECK_PRESS(keys, k)           ((keys.key == k) && (keys.event & KEY_MOD_PRESS))
 #define KEYCHECK_LONGDOWN(keys, k)        ((keys.key == k) && ((keys.event & (KEY_MOD_DOWN | KEY_MOD_LONG)) == (KEY_MOD_DOWN | KEY_MOD_LONG)))
 #define KEYCHECK_LONGDOWN_REPEAT(keys, k) ((keys.key == k) && ((keys.event & (KEY_MOD_PRESS | KEY_MOD_LONG)) == (KEY_MOD_PRESS | KEY_MOD_LONG)))
 
 #define KEYCHECK_SHORTUP_NUMBER(keys)      ((keys.key >='0' && keys.key <='9') && ((keys.event & (KEY_MOD_UP | KEY_MOD_LONG)) == KEY_MOD_UP))
-#define KEYCHECK_PRESS_NUMBER(keys)        ((keys.key >='0' && keys.key <='9') && ((keys.event & KEY_MOD_PRESS) == KEY_MOD_PRESS))
+#define KEYCHECK_PRESS_NUMBER(keys)        ((keys.key >='0' && keys.key <='9') && (keys.event & KEY_MOD_PRESS))
 #define KEYCHECK_LONGDOWN_NUMBER(keys)     ((keys.key >='0' && keys.key <='9') && ((keys.event & (KEY_MOD_DOWN | KEY_MOD_LONG)) == (KEY_MOD_DOWN | KEY_MOD_LONG)))
 
-
-
-
-
-//#define KEYCHAR(keys)              ((char)(keys & 0xff))
+#define EVENTCHECK_SHORTUP(keys)		   ((keys.event & (KEY_MOD_UP | KEY_MOD_LONG)) == KEY_MOD_UP)
 
 extern volatile bool keypadLocked;
 extern volatile bool keypadAlphaEnable;
@@ -117,6 +149,6 @@ void keyboardReset(void);
 bool keyboardKeyIsDTMFKey(char key);
 uint32_t keyboardRead(void);
 void keyboardCheckKeyEvent(keyboardCode_t *keys, int *event);
-bool heyboardScanKey(uint32_t scancode, char *keycode);
+bool keyboardScanKey(uint32_t scancode, char *keycode);
 
 #endif /* _OPENGD77_KEYBOARD_H_ */

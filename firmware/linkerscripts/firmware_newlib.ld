@@ -106,7 +106,7 @@ SECTIONS
 
     .codec_bin_section_2 : ALIGN(4)
     {
-        . = ABSOLUTE(0x50000) ;
+        . = ABSOLUTE(0x54000) ;
        *(.codec_bin_section_2)
         KEEP(*(.codec_bin_section_2))
     } > PROGRAM_FLASH

@@ -1,3 +1,4 @@
+#if defined(USING_EXTERNAL_DEBUGGER)
 /*********************************************************************
 *                SEGGER Microcontroller GmbH & Co. KG                *
 *                        The Embedded Experts                        *
@@ -247,3 +248,8 @@ int SEGGER_RTT_printf(unsigned BufferIndex, const char * sFormat, ...);
 #endif
 
 /*************************** End of file ****************************/
+#else
+// Dummy macros
+#define SEGGER_RTT_ConfigUpBuffer(index, name, pBuffer, BufferSize, Flags) do {} while(0)
+#define SEGGER_RTT_printf(index, format, ...) do {} while(0)
+#endif

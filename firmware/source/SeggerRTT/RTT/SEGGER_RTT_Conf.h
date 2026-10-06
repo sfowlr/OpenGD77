@@ -1,3 +1,4 @@
+#if defined(USING_EXTERNAL_DEBUGGER)
 /*********************************************************************
 *                SEGGER Microcontroller GmbH & Co. KG                *
 *                        The Embedded Experts                        *
@@ -294,3 +295,4 @@ Revision: $Rev: 5496 $
 
 #endif
 /*************************** End of file ****************************/
+#endif

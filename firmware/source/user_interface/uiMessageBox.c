@@ -1,25 +1,34 @@
 /*
- * Copyright (C)2019-2020 Roger Clark. VK3KYY / G4KYF
- *                        Daniel Caujolle-Bert, F1RMB
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
+#include "user_interface/uiGlobals.h"
 #include "user_interface/menuSystem.h"
 #include "user_interface/uiLocalisation.h"
 #include "user_interface/uiUtilities.h"
-#include "functions/ticks.h"
 #include "utils.h"
 
 static menuStatus_t menuMessageBoxExitCode;
@@ -64,7 +73,6 @@ menuStatus_t uiMessageBox(uiEvent_t *ev, bool isFirstRun)
 		}
 		else
 		{
-
 			if (ev->hasEvent)
 			{
 				handleEvent(ev);
@@ -83,6 +91,12 @@ static void handleEvent(uiEvent_t *ev)
 		{
 			return;
 		}
+	}
+
+	if ((ev->events & FUNCTION_EVENT) && (ev->function == FUNC_REDRAW))
+	{
+		updateScreen(true);
+		return;
 	}
 
 	if (KEYCHECK_SHORTUP(ev->keys, KEY_GREEN))
@@ -124,7 +138,11 @@ static void handleEvent(uiEvent_t *ev)
 	}
 	else if (KEYCHECK_SHORTUP(ev->keys, KEY_RED))
 	{
-		bool redHandled = (uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_OK);
+		bool redHandled = (uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_OK)
+#if defined(PLATFORM_MD9600)
+				&& (uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_ENT)
+#endif
+				;
 		bool res = false;
 
 		uiDataGlobal.MessageBox.keyPressed = KEY_RED;
@@ -186,7 +204,7 @@ static void updateScreen(bool forceRedraw)
 
 	if (forceRedraw)
 	{
-		ucClearBuf();
+		displayClearBuf();
 	}
 
 	switch (uiDataGlobal.MessageBox.type)
@@ -195,11 +213,14 @@ static void updateScreen(bool forceRedraw)
 		{
 			if (uiDataGlobal.MessageBox.decoration != MESSAGEBOX_DECORATION_NONE)
 			{
-				ucDrawRoundRectWithDropShadow(4, 4, 120, DISPLAY_SIZE_Y - (uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_NONE ? FONT_SIZE_3_HEIGHT : 0) - 6, 5, true);
+				displayThemeApply(THEME_ITEM_FG_DECORATION, THEME_ITEM_BG_NOTIFICATION);
+				displayDrawRoundRectWithDropShadow(4, (4 + (DISPLAY_V_OFFSET - (DISPLAY_V_OFFSET / 2))), (DISPLAY_SIZE_X - (2 * 4)),
+						(((DISPLAY_SIZE_Y - ((uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_NONE) ? FONT_SIZE_3_HEIGHT : 0)) - 6 - DISPLAY_V_EXTRA_PIXELS) + DISPLAY_V_OFFSET), 5, true);
 			}
 
 			if (strlen(uiDataGlobal.MessageBox.message))
 			{
+				displayThemeApply(THEME_ITEM_FG_NOTIFICATION, THEME_ITEM_BG_NOTIFICATION);
 				displayMessage();
 			}
 
@@ -209,12 +230,18 @@ static void updateScreen(bool forceRedraw)
 
 		case MESSAGEBOX_TYPE_PIN_CODE:
 		{
-			char pinStr[17] = { 0 };
-			int8_t xCursor = -1;
-			int8_t yCursor = -1;
+			char pinStr[SCREEN_LINE_BUFFER_SIZE] = { 0 };
+			int16_t xCursor = -1;
+			int16_t yCursor = -1;
+#if defined(HAS_COLOURS)
+			bool dblHeight = settingsIsOptionBitSet(BIT_UI_USES_DOUBLE_HEIGHT);
+#else
+			const bool dblHeight = false;
+#endif
 
 			if (forceRedraw)
 			{
+				displayThemeApply(THEME_ITEM_FG_TEXT_INPUT, THEME_ITEM_BG);
 				displayMessage();
 
 				uiDataGlobal.MessageBox.buttons = MESSAGEBOX_BUTTONS_OK;
@@ -223,16 +250,16 @@ static void updateScreen(bool forceRedraw)
 			else
 			{
 				// Clear input
-				ucFillRect(0, (((DISPLAY_SIZE_Y / 8) - 1) * 3) + 2, DISPLAY_SIZE_X,
-						(DISPLAY_SIZE_Y - (((DISPLAY_SIZE_Y / 8) - 1) * 3)) - FONT_SIZE_3_HEIGHT - 2, true);
+				displayThemeResetToDefault();
+				displayFillRect(0, TITLE_BOX_HEIGHT + 2, DISPLAY_SIZE_X,
+						DISPLAY_SIZE_Y - TITLE_BOX_HEIGHT - FONT_SIZE_3_HEIGHT - 2, true);
 			}
 
-			for (uint8_t i = 0; i < SAFE_MIN(uiDataGlobal.MessageBox.pinLength, FREQ_ENTER_DIGITS_MAX); i++)
-			{
-				sprintf(pinStr, "%s%c", pinStr, uiDataGlobal.FreqEnter.digits[i]);
-			}
+			memset(pinStr, 0, sizeof(pinStr));
+			memcpy(pinStr, uiDataGlobal.FreqEnter.digits, SAFE_MIN(uiDataGlobal.MessageBox.pinLength, FREQ_ENTER_DIGITS_MAX));
 
-			ucPrintCentered(DISPLAY_Y_POS_RX_FREQ, pinStr, FONT_SIZE_3);
+			displayThemeApply(THEME_ITEM_FG_TEXT_INPUT, THEME_ITEM_BG);
+			displayPrintCenteredDoubleHeight((DISPLAY_Y_POS_RX_FREQ - (dblHeight ? FONT_SIZE_3_HEIGHT : 0)), pinStr, FONT_SIZE_3, dblHeight);
 
 			// Cursor
 			if (uiDataGlobal.FreqEnter.index < uiDataGlobal.MessageBox.pinLength)
@@ -243,11 +270,11 @@ static void updateScreen(bool forceRedraw)
 
 			if ((xCursor >= 0) && (yCursor >= 0))
 			{
-				ucDrawFastHLine(xCursor + 1, yCursor, 6, blink);
+				displayDrawFastHLine(xCursor + 1, yCursor, 6, blink);
 
-				if ((fw_millis() - blinkTime) > 500)
+				if ((ticksGetMillis() - blinkTime) > 500)
 				{
-					blinkTime = fw_millis();
+					blinkTime = ticksGetMillis();
 					blink = !blink;
 				}
 			}
@@ -258,24 +285,32 @@ static void updateScreen(bool forceRedraw)
 			break;
 	}
 
-	ucRender();
+	displayThemeResetToDefault();
+	displayRender();
 }
 
 static void displayMessage(void)
 {
-	char msg[17];
-	int y = 0;
+	char msg[SCREEN_LINE_BUFFER_SIZE];
 	bool decoration = (uiDataGlobal.MessageBox.decoration != MESSAGEBOX_DECORATION_NONE);
 	char *p = strchr(uiDataGlobal.MessageBox.message, '\n');
-	int linesCount = (p ? 1 : 0);
-	int maxLines = (decoration ? 3 : 4);
+	uint16_t y = 0;
+	uint8_t linesCount = (p ? 1U : 0U);
+	uint8_t maxLines =
+#if defined(PLATFORM_MD9600) || defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
+			(decoration ? 3U : 4U);
+#else
+			4U;
+#endif
 
 	if (uiDataGlobal.MessageBox.type != MESSAGEBOX_TYPE_PIN_CODE)
 	{
+#if ! defined(HAS_COLOURS)
 		if (uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_NONE)
 		{
 			maxLines--;
 		}
+#endif
 
 		while (p)
 		{
@@ -295,21 +330,21 @@ static void displayMessage(void)
 
 	if ((uiDataGlobal.MessageBox.type != MESSAGEBOX_TYPE_PIN_CODE) && linesCount)
 	{
-		int len = strlen(uiDataGlobal.MessageBox.message);
+		size_t len = strlen(uiDataGlobal.MessageBox.message);
 		char *pb = uiDataGlobal.MessageBox.message;
 		char *pe = &uiDataGlobal.MessageBox.message[0] + len;
-		int cnt;
+		uint16_t count;
 
 		p = strchr(uiDataGlobal.MessageBox.message, '\n');
 
-		while (linesCount > 1)
+		while (linesCount > 1U)
 		{
-			cnt = SAFE_MIN((p - pb), (decoration ? 14 : 16));
+			count = SAFE_MIN((uint16_t)(p - pb), (decoration ? 14U : 16U));
 
-			memcpy(msg, pb, cnt);
-			msg[cnt] = '\0';
+			memcpy(msg, pb, count);
+			msg[count] = '\0';
 
-			ucPrintCentered(y, msg, FONT_SIZE_3);
+			displayPrintCentered(y, msg, FONT_SIZE_3);
 			y += FONT_SIZE_3_HEIGHT;
 
 			pb = p + 1;
@@ -320,33 +355,47 @@ static void displayMessage(void)
 
 		if (pb < pe)
 		{
-			cnt = SAFE_MIN((pe - pb), (decoration ? 14 : 16));
+			count = SAFE_MIN((uint16_t)(pe - pb), (decoration ? 14U : 16U));
 
 			p++;
-			memcpy(msg, pb, cnt);
-			msg[cnt] = '\0';
 
-			ucPrintCentered(y, msg, FONT_SIZE_3);
+			// Looking for another new line
+			if ((p = strchr(pb, '\n')) != NULL)
+			{
+				count = (uint16_t)(p - pb);
+			}
+
+			memcpy(msg, pb, count);
+			msg[count] = '\0';
+
+			displayPrintCentered(y, msg, FONT_SIZE_3);
 		}
 	}
 	else
 	{
-		y = ((DISPLAY_SIZE_Y - FONT_SIZE_3_HEIGHT) >> 1);
-
 		if (uiDataGlobal.MessageBox.type == MESSAGEBOX_TYPE_PIN_CODE)
 		{
 			decoration = true; // Override decoration
 
 			// Display title
-			ucDrawRoundRectWithDropShadow(2, 2, (DISPLAY_SIZE_X - 6), ((DISPLAY_SIZE_Y / 8) - 1) * 3, 3, true);
+			displayThemeApply(THEME_ITEM_FG_DECORATION, THEME_ITEM_BG_MENU_NAME);
+			displayDrawRoundRectWithDropShadow(2, 2, (DISPLAY_SIZE_X - 6), TITLE_BOX_HEIGHT, 3, true);
+			displayThemeApply(THEME_ITEM_FG_MENU_NAME, THEME_ITEM_BG_MENU_NAME);
 
-			y = 3;
+			y = 3U;
+		}
+		else
+		{
+			// V center into the decoration frame area
+			uint16_t startY = (4 + (DISPLAY_V_OFFSET - (DISPLAY_V_OFFSET / 2)));
+			uint16_t height = (((DISPLAY_SIZE_Y - ((uiDataGlobal.MessageBox.buttons != MESSAGEBOX_BUTTONS_NONE) ? FONT_SIZE_3_HEIGHT : 0)) - 6 - DISPLAY_V_EXTRA_PIXELS) + DISPLAY_V_OFFSET) - 2;
+
+			y = ((startY + (height >> 1)) - (FONT_SIZE_3_HEIGHT >> 1));
 		}
 
 		snprintf(msg, (decoration ? 15 : 17), "%s", uiDataGlobal.MessageBox.message);
-		ucPrintCentered(y, msg, FONT_SIZE_3);
+		displayPrintCentered(y, msg, FONT_SIZE_3);
 	}
-
 }
 
 static void displayButtons(void)
@@ -354,13 +403,18 @@ static void displayButtons(void)
 	switch (uiDataGlobal.MessageBox.buttons)
 	{
 		case MESSAGEBOX_BUTTONS_OK:
-			ucDrawChoice(CHOICE_OK, false);
+			displayDrawChoice(CHOICE_OK, false);
 			break;
+#if defined(PLATFORM_MD9600)
+		case MESSAGEBOX_BUTTONS_ENT:
+			displayDrawChoice(CHOICE_ENT, false);
+			break;
+#endif
 		case MESSAGEBOX_BUTTONS_YESNO:
-			ucDrawChoice(CHOICE_YESNO, false);
+			displayDrawChoice(CHOICE_YESNO, false);
 			break;
 		case MESSAGEBOX_BUTTONS_DISMISS:
-			ucDrawChoice(CHOICE_DISMISS, false);
+			displayDrawChoice(CHOICE_DISMISS, false);
 			break;
 		default:
 			break;

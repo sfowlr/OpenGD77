@@ -47,14 +47,12 @@ SECTIONS
 
     .text_main : ALIGN(4)
     {
-       *(.text*)
+       *(EXCLUDE_FILE(*menuCalibration.o *calibration.o).text* )
        *(.rodata .rodata.* .constdata .constdata.*)
        . = ALIGN(4);
        _etext = . ;
     } > PROGRAM_FLASH
     
-
-     
 
     /* Main DATA section (SRAM_LOWER) */
     .data : ALIGN(4)
@@ -106,11 +104,21 @@ SECTIONS
 
     .codec_bin_section_2 : ALIGN(4)
     {
-        . = ABSOLUTE(0x50000) ;
+        . = ABSOLUTE(0x54000) ;
        *(.codec_bin_section_2)
         KEEP(*(.codec_bin_section_2))
     } > PROGRAM_FLASH
-
+    
+    .upper_text : ALIGN(4)
+    {
+    	*menuCalibration.o (.text*)
+        *calibration.o (.text*)
+        *(.text*)
+        *(.rodata .rodata.* .constdata .constdata.*)
+       . = ALIGN(4);
+    } > PROGRAM_FLASH
+    
+    
     /* BSS section for SRAM_LOWER */
     .bss_RAM2 : ALIGN(4)
     {
@@ -183,6 +191,6 @@ SECTIONS
      * complex images (e.g multiple Flash banks).
      */
     _image_start = LOADADDR(.text_start);
-    _image_end = LOADADDR(.codec_bin_section_2) + SIZEOF(.codec_bin_section_2);
+    _image_end = LOADADDR(.codec_bin_section_2) + SIZEOF(.codec_bin_section_2) + SIZEOF(.upper_text);
     _image_size = _image_end - _image_start;
 }

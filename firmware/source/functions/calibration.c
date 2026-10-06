@@ -1,20 +1,30 @@
 /*
- * Copyright (C)2019 	Roger Clark, VK3KYY / G4KYF
- * 				and 	Kai Ludwig, DG4KLU
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 
 #include "utils.h"
@@ -94,14 +104,23 @@ typedef struct
      CalibrationBandData_t band[CalibrationBandMAX];
 } CalibrationData_t;
 
-
 #define CALIBRATION_TABLE_LENGTH 0xE0 // Calibration table is 224 bytes long
 static __attribute__((section(".data.$RAM2"))) CalibrationData_t calibrationData;
 
 
 bool calibrationInit(void)
 {
+	return calibrationReadLocal();
+}
+
+bool calibrationReadLocal(void)
+{
 	return (SPI_Flash_read(CALIBRATION_BASE, (uint8_t *)&calibrationData, CALIBRATION_TABLE_LENGTH));
+}
+
+void calibrationSaveLocal(void)
+{
+	(void)SPI_Flash_write(CALIBRATION_BASE , (uint8_t *)&calibrationData , CALIBRATION_TABLE_LENGTH);
 }
 
 bool calibrationGetSectionData(CalibrationBand_t band, CalibrationSection_t section, CalibrationDataResult_t *o)
@@ -351,7 +370,7 @@ const uint32_t VARIANT_CALIBRATION_BASE 				= 0x0008F000;
 const int MARKER_BYTES_LENGTH = 8;
 const uint8_t MARKER_BYTES[] = {0xA0 ,0x0F ,0xC0 ,0x12 ,0xA0 ,0x0F ,0xC0 ,0x12};
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 const uint32_t VARIANT_CALIBRATION_BASE 				= 0x0006F000;
 const int MARKER_BYTES_LENGTH = 2;
@@ -394,4 +413,75 @@ const uint8_t MARKER_BYTES[] = {0xA0 ,0x0F};// ,0x50 ,0x14 ,0xA0 ,0x0F ,0x50 ,0x
 	}
 
 	return false; // Something went wrong!
+}
+
+int16_t calibrationGetUHFOscTune(void)
+{
+	int16_t tmp = (int16_t) calibrationData.band[CalibrationBandUHF].DACOscRefTune;
+
+	if (tmp > 511)
+	{
+		tmp -= 1024;
+	}
+
+	return tmp;
+}
+
+void calibrationPutUHFOscTune(int16_t val)
+{
+	if (val < 0)
+	{
+		val += 1024;
+	}
+
+	calibrationData.band[CalibrationBandUHF].DACOscRefTune = val;
+	calibrationData.band[CalibrationBandUHF].QMod2Offset = (val & 0xFF);
+}
+
+int16_t calibrationGetVHFOscTune(void)
+{
+	int16_t tmp = (int16_t) calibrationData.band[CalibrationBandVHF].DACOscRefTune;
+
+	if (tmp > 511)
+	{
+		tmp -= 1024;
+	}
+
+	return tmp;
+}
+
+void calibrationPutVHFOscTune(int16_t val)
+{
+	if (val < 0)
+	{
+		val += 1024;
+	}
+
+	calibrationData.band[CalibrationBandVHF].DACOscRefTune = val;
+	calibrationData.band[CalibrationBandVHF].QMod2Offset = (val & 0xFF);
+}
+
+static const int NUM_VHF_POWER_CALIBRATION_BANDS = 8;
+
+uint8_t calibrationGetPower(int freqindex,int powerindex)
+{
+	if (freqindex < NUM_VHF_POWER_CALIBRATION_BANDS)
+	{
+		return calibrationData.band[CalibrationBandVHF].PowerSettings[freqindex][powerindex];
+	}
+
+	//UHF calibration values
+	return calibrationData.band[CalibrationBandUHF].PowerSettings[freqindex - NUM_VHF_POWER_CALIBRATION_BANDS][powerindex];
+}
+
+void calibrationPutPower(int freqindex , int powerindex, uint8_t val)
+{
+	if(freqindex < NUM_VHF_POWER_CALIBRATION_BANDS)
+	{
+		calibrationData.band[CalibrationBandVHF].PowerSettings[freqindex][powerindex] = val;
+	}
+	else
+	{
+		calibrationData.band[CalibrationBandUHF].PowerSettings[freqindex - NUM_VHF_POWER_CALIBRATION_BANDS][powerindex] = val;
+	}
 }

@@ -1,102 +1,161 @@
 /*
- * Copyright (C)2019 Kai Ludwig, DG4KLU
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 #include <stdarg.h>
-#include "hotspot/uiHotspot.h"
-#include "functions/settings.h"
+#include "user_interface/uiGlobals.h"
+#include "functions/hotspot.h"
 #include "user_interface/uiUtilities.h"
 #include "user_interface/menuSystem.h"
 #include "usb/usb_com.h"
-#include "functions/ticks.h"
 #include "interfaces/wdog.h"
 #include "hardware/HR-C6000.h"
 #include "functions/sound.h"
+#include "hardware/SPI_Flash.h"
+#include "user_interface/uiLocalisation.h"
+#include "functions/rxPowerSaving.h"
+#include "interfaces/gps.h"
+
+//#define LOOKUP_ENABLED 1
+//#define DEBUG_POSITION 1
+
+
+enum CPS_ACCESS_AREA
+{
+	CPS_ACCESS_FLASH = 1,
+	CPS_ACCESS_EEPROM = 2,
+	CPS_ACCESS_MCU_ROM = 5,
+	CPS_ACCESS_DISPLAY_BUFFER = 6,
+	CPS_ACCESS_WAV_BUFFER = 7,
+	CPS_COMPRESS_AND_ACCESS_AMBE_BUFFER = 8,
+	CPS_ACCESS_RADIO_INFO = 9,
+#if ! defined(CPU_MK22FN512VLL12)
+	CPS_ACCESS_FLASH_SECURITY_REGISTERS = 10,
+#endif
+};
+
+
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+#define TASK_LOCK_WRITE()	  do { } while(0)
+#define TASK_UNLOCK_WRITE()	  do { } while(0)
+#elif defined(PLATFORM_MD9600) || defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+#define TASK_LOCK_WRITE()	  do { taskENTER_CRITICAL(); } while(0)
+#define TASK_UNLOCK_WRITE()	  do { taskEXIT_CRITICAL(); } while(0)
+#else
+#error configure this platform about tasks locking
+#endif
+
 
 static void handleCPSRequest(void);
 
-__attribute__((section(".data.$RAM2"))) volatile uint8_t com_buffer[COM_BUFFER_SIZE];
-int com_buffer_write_idx = 0;
-int com_buffer_read_idx = 0;
-volatile int com_buffer_cnt = 0;
 volatile int com_request = 0;
 __attribute__((section(".data.$RAM2"))) volatile uint8_t com_requestbuffer[COM_REQUESTBUFFER_SIZE];
 __attribute__((section(".data.$RAM2"))) USB_DMA_NONINIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE) uint8_t usbComSendBuf[COM_BUFFER_SIZE];//DATA_BUFF_SIZE
-int sector = -1;
+
+static int sector = -1;
+volatile int comRecvMMDVMIndexIn = 0;
+volatile int comRecvMMDVMIndexOut = 0;
+volatile int comRecvMMDVMFrameCount = 0;
 static bool flashingDMRIDs = false;
 static bool channelsRewritten = false;
+static bool luczRewritten = false;
+#if defined(HAS_GPS)
+static gpsMode_t previousGPSState = GPS_NOT_DETECTED;
+#endif
 
+bool isCompressingAMBE = false;
+
+
+static bool addressInSegment(uint32_t address, uint32_t length, uint32_t segmentStart, uint32_t segmentSize)
+{
+	return ((address >= segmentStart) && ((address + length) <= (segmentStart + segmentSize)));
+}
 
 void tick_com_request(void)
 {
-		switch (settingsUsbMode)
-		{
-			case USB_MODE_CPS:
-				if (com_request == 1)
-				{
-					if ((nonVolatileSettings.hotspotType != HOTSPOT_TYPE_OFF) && (com_requestbuffer[0] == 0xE0U /* MMDVM_FRAME_START */))
-					{
-						settingsUsbMode = USB_MODE_HOTSPOT;
-						menuSystemPushNewMenu(UI_HOTSPOT_MODE);
-						return;
-					}
-					taskENTER_CRITICAL();
-					handleCPSRequest();
-					taskEXIT_CRITICAL();
-					com_request = 0;
-				}
+	switch (settingsUsbMode)
+	{
+		case USB_MODE_CPS:
+			if (com_request == 1)
+			{
+				handleCPSRequest();
+				com_request = 0;
+			}
+			break;
 
-				break;
-			case USB_MODE_HOTSPOT:
-				break;
+		case USB_MODE_HOTSPOT:
+			// That will happen once when MMDVMHost send the first frame
+			// out of the Hotspot mode.
+			if (com_request == 1)
+			{
+				com_request = 0;
+
+				if ((nonVolatileSettings.hotspotType != HOTSPOT_TYPE_OFF) &&
+						((comRecvMMDVMFrameCount >= 1) && (com_requestbuffer[1] == MMDVM_FRAME_START)) &&
+						(uiDataGlobal.dmrDisabled == false)) // DMR (digital) is disabled.
+				{
+					if (menuSystemGetCurrentMenuNumber() != UI_HOTSPOT_MODE)
+					{
+						menuSystemPushNewMenu(UI_HOTSPOT_MODE);
+					}
+				}
+			}
+			break;
 	}
 }
 
-enum CPS_ACCESS_AREA { CPS_ACCESS_FLASH = 1,CPS_ACCESS_EEPROM = 2, CPS_ACCESS_MCU_ROM=5,CPS_ACCESS_DISPLAY_BUFFER=6,CPS_ACCESS_WAV_BUFFER=7,CPS_COMPRESS_AND_ACCESS_AMBE_BUFFER=8};
-
 static void cpsHandleReadCommand(void)
 {
-
 	uint32_t address = (com_requestbuffer[2] << 24) + (com_requestbuffer[3] << 16) + (com_requestbuffer[4] << 8) + (com_requestbuffer[5] << 0);
 	uint32_t length = (com_requestbuffer[6] << 8) + (com_requestbuffer[7] << 0);
 	bool result = false;
 
-	if (length > 32)
+	watchdogRun(false);
+
+	if (length > (COM_REQUESTBUFFER_SIZE - 3))
 	{
-		length = 32;
+		length = (COM_REQUESTBUFFER_SIZE - 3);
 	}
 
 	switch(com_requestbuffer[1])
 	{
 		case CPS_ACCESS_FLASH:
-			taskEXIT_CRITICAL();
 			result = SPI_Flash_read(address, &usbComSendBuf[3], length);
-			taskENTER_CRITICAL();
 			break;
 		case CPS_ACCESS_EEPROM:
-			taskEXIT_CRITICAL();
 			result = EEPROM_Read(address, &usbComSendBuf[3], length);
-			taskENTER_CRITICAL();
 			break;
 		case CPS_ACCESS_MCU_ROM:
 			memcpy(&usbComSendBuf[3], (uint8_t *)address, length);
 			result = true;
 			break;
 		case CPS_ACCESS_DISPLAY_BUFFER:
-			memcpy(&usbComSendBuf[3], &screenBuf[address], length);
+			rxPowerSavingSetState(ECOPHASE_POWERSAVE_INACTIVE); // Avoiding going into a state that USB doesn't work.
+			memcpy(&usbComSendBuf[3], displayGetPrimaryScreenBuffer() + address, length);
 			result = true;
 			break;
 		case CPS_ACCESS_WAV_BUFFER:
@@ -113,6 +172,63 @@ static void cpsHandleReadCommand(void)
 				result = true;
 			}
 			break;
+		case CPS_ACCESS_RADIO_INFO:
+			{
+				struct __attribute__((__packed__))
+				{
+					uint32_t structVersion;
+					uint32_t radioType;
+					char gitRevision[16];
+					char buildDateTime[16];
+					uint32_t flashId;
+					uint16_t features;
+				} radioInfo;
+
+				radioInfo.structVersion = 0x03;
+#if defined(PLATFORM_GD77)
+				radioInfo.radioType = 0;
+#elif defined(PLATFORM_GD77S)
+				radioInfo.radioType = 1;
+#elif defined(PLATFORM_DM1801)
+				radioInfo.radioType = 2;
+#elif defined(PLATFORM_RD5R)
+				radioInfo.radioType = 3;
+#elif defined(PLATFORM_DM1801A)
+				radioInfo.radioType = 4;
+#elif defined(PLATFORM_MD9600)
+				radioInfo.radioType = 5;
+#elif defined(PLATFORM_MDUV380)
+				radioInfo.radioType = 6;
+#elif defined(PLATFORM_MD380)
+				radioInfo.radioType = 7;
+#elif defined(PLATFORM_RT84_DM1701) // because of BGR565 / RGB656 colour formats
+				radioInfo.radioType = ((DISPLAYLCD_TYPE_IS_RGB(displayLCD_Type) != 0) ? 10 : 8);
+#elif defined(PLATFORM_MD2017)
+				radioInfo.radioType = 9;
+#endif
+				// 10 is reserved for DM1701 with RGB panel
+
+				snprintf(radioInfo.gitRevision, sizeof(radioInfo.gitRevision), "%s", GITVERSION);
+				snprintf(radioInfo.buildDateTime, sizeof(radioInfo.buildDateTime), "%04d%02d%02d%02d%02d%02d", BUILD_YEAR, BUILD_MONTH, BUILD_DAY, BUILD_HOUR, BUILD_MIN, BUILD_SEC);
+				radioInfo.flashId = flashChipPartNumber;
+				// Features bitfield (16 bits)
+				radioInfo.features = (settingsIsOptionBitSet(BIT_INVERSE_VIDEO) ? 1 : 0);
+				radioInfo.features |= (((dmrIDDatabaseMemoryLocation2 == VOICE_PROMPTS_FLASH_HEADER_ADDRESS) ? 1 : 0) << 1);
+				radioInfo.features |= ((voicePromptDataIsLoaded ? 1 : 0) << 2);
+
+				length = sizeof(radioInfo);
+				memcpy(&usbComSendBuf[3], &radioInfo, length);
+				result = true;
+			}
+			break;
+
+#if ! defined(CPU_MK22FN512VLL12)
+		case CPS_ACCESS_FLASH_SECURITY_REGISTERS:
+			TASK_UNLOCK_WRITE();
+			result = SPI_Flash_readSecurityRegisters(address, (uint8_t *)&usbComSendBuf[3], length);
+			TASK_LOCK_WRITE();
+			break;
+#endif
 	}
 
 	if (result)
@@ -127,98 +243,173 @@ static void cpsHandleReadCommand(void)
 		usbComSendBuf[0] = '-';
 		USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, 1);
 	}
+
+	watchdogRun(true);
 }
 
 static void cpsHandleWriteCommand(void)
 {
 	bool ok = false;
 
+	watchdogRun(false);
+
 	switch(com_requestbuffer[1])
 	{
-		case 1:
+		case 1: // Flash Prepare Sector
 			if (sector == -1)
 			{
-				sector=(com_requestbuffer[2] << 16) + (com_requestbuffer[3] << 8) + (com_requestbuffer[4] << 0);
+				sector = (com_requestbuffer[2] << 16) + (com_requestbuffer[3] << 8) + (com_requestbuffer[4] << 0);
 
 				if ((sector * 4096) == 0x30000) // start address of DMRIDs DB
 				{
 					flashingDMRIDs = true;
 				}
 
-				taskEXIT_CRITICAL();
 				ok = SPI_Flash_read(sector * 4096, SPI_Flash_sectorbuffer, 4096);
-				taskENTER_CRITICAL();
 			}
 			break;
-		case 2:
+
+		case 2: // Flash Send Data
 			if (sector >= 0)
 			{
 				uint32_t address = (com_requestbuffer[2] << 24) + (com_requestbuffer[3] << 16) + (com_requestbuffer[4] << 8) + (com_requestbuffer[5] << 0);
 				uint32_t length = (com_requestbuffer[6] << 8) + (com_requestbuffer[7] << 0);
 
-				if (length > 32)
+#if defined(PLATFORM_MD9600) || defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+				if ((calibrationWriting == false) && addressInSegment(address, length, 0x10000, 0x200)) // Local calibration
 				{
-					length = 32;
+					calibrationWriting = true;
+				}
+				// Channel is going to be rewritten, will need to reset current zone/etc...
+				else if ((channelsRewritten == false) && addressInSegment(address, length, CODEPLUG_ADDR_CHANNEL_HEADER_EEPROM, 0x1C10 /*128 first channels*/))
+				{
+					channelsRewritten = true;
+				}
+				else if ((luczRewritten == false) && addressInSegment(address, length, CODEPLUG_ADDR_LUCZ, (4 + CODEPLUG_ALL_ZONES_MAX + 1)))
+				{
+					luczRewritten = true;
+				}
+				else
+#endif
+#if !defined(PLATFORM_GD77S)
+				// Temporary hack to automatically set Prompt to Level 1
+				// A better solution will be added to the CPS and firmware at a later date.
+				if ((address == VOICE_PROMPTS_FLASH_HEADER_ADDRESS) || (address == VOICE_PROMPTS_FLASH_OLD_HEADER_ADDRESS))
+				{
+					if (voicePromptsCheckMagicAndVersion((uint32_t *)&com_requestbuffer[8]))
+					{
+						nonVolatileSettings.audioPromptMode = AUDIO_PROMPT_MODE_VOICE_LEVEL_1;
+					}
+				}
+#endif
+
+				if (length > (COM_REQUESTBUFFER_SIZE - 8))
+				{
+					length = (COM_REQUESTBUFFER_SIZE - 8);
 				}
 
-				for (int i = 0; i < length; i++)
+#if defined(PLATFORM_MD9600) || defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+				// Temporary hack to prevent the QuickKeys getting overwritten by the codeplug
+				const int QUICKKEYS_BLOCK_END = (CODEPLUG_ADDR_QUICKKEYS + (CODEPLUG_QUICKKEYS_SIZE * sizeof(uint16_t)) - 1);
+				int end = (address + length) - 1;
+
+				if (((address >= CODEPLUG_ADDR_QUICKKEYS) && (address <= QUICKKEYS_BLOCK_END))
+						|| ((end >= CODEPLUG_ADDR_QUICKKEYS) && (end <= QUICKKEYS_BLOCK_END))
+						|| ((address < CODEPLUG_ADDR_QUICKKEYS) && (end > QUICKKEYS_BLOCK_END)))
 				{
-					if (sector == (address + i) / 4096)
+					if (address < CODEPLUG_ADDR_QUICKKEYS)
 					{
-						SPI_Flash_sectorbuffer[(address + i) % 4096] = com_requestbuffer[i + 8];
+						for (int i = 0; i < (CODEPLUG_ADDR_QUICKKEYS - address); i++)
+						{
+							if (sector == (address + i) / 4096)
+							{
+								SPI_Flash_sectorbuffer[(address + i) % 4096] = com_requestbuffer[i + 8];
+							}
+						}
+
+						if ((end > QUICKKEYS_BLOCK_END))
+						{
+							for (int i = 0; i <  (end - QUICKKEYS_BLOCK_END); i++)
+							{
+								if (sector == ((QUICKKEYS_BLOCK_END + 1) + i) / 4096)
+								{
+									SPI_Flash_sectorbuffer[((QUICKKEYS_BLOCK_END + 1) + i) % 4096] = com_requestbuffer[i + 8 + ((QUICKKEYS_BLOCK_END + 1) - address)];
+								}
+							}
+						}
+
+					}
+					else
+					{
+						if ((address <= QUICKKEYS_BLOCK_END) && (end > QUICKKEYS_BLOCK_END))
+						{
+							for (int i = 0; i < (end - QUICKKEYS_BLOCK_END); i++)
+							{
+								if (sector == ((QUICKKEYS_BLOCK_END + 1) + i) / 4096)
+								{
+									SPI_Flash_sectorbuffer[((QUICKKEYS_BLOCK_END + 1) + i) % 4096] = com_requestbuffer[i + 8 + ((QUICKKEYS_BLOCK_END + 1) - address)];
+								}
+							}
+						}
+					}
+				}
+				else
+#endif
+				{
+					for (int i = 0; i < length; i++)
+					{
+						if (sector == (address + i) / 4096)
+						{
+							SPI_Flash_sectorbuffer[(address + i) % 4096] = com_requestbuffer[i + 8];
+						}
 					}
 				}
 
 				ok = true;
 			}
 			break;
-		case 3:
+
+		case 3: // Flash Write
 			if (sector >= 0)
 			{
-#if !defined(PLATFORM_GD77S)
-				// Temporary hack to automatically set Prompt to Level 1
-				// A better solution will be added to the CPS and firmware at a later date.
-				if ((sector * 4096) == VOICE_PROMPTS_FLASH_HEADER_ADDRESS)
-				{
-					nonVolatileSettings.audioPromptMode = AUDIO_PROMPT_MODE_VOICE_LEVEL_1;
-				}
-#endif
-
-				taskEXIT_CRITICAL();
 				ok = SPI_Flash_eraseSector(sector * 4096);
-				taskENTER_CRITICAL();
 				if (ok)
 				{
+					// Write the 16 pages of the sector
 					for (int i = 0; i < 16; i++)
 					{
-						taskEXIT_CRITICAL();
 						ok = SPI_Flash_writePage(sector * 4096 + i * 256, SPI_Flash_sectorbuffer + i * 256);
-						taskENTER_CRITICAL();
 						if (!ok)
 						{
 							break;
 						}
 					}
 				}
+
 				sector = -1;
 			}
 			break;
-		case 4:
+
+		case 4: // EEPROM
 			{
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
 				uint32_t address = (com_requestbuffer[2] << 24) + (com_requestbuffer[3] << 16) + (com_requestbuffer[4] << 8) + (com_requestbuffer[5] << 0);
 				uint32_t length = (com_requestbuffer[6] << 8) + (com_requestbuffer[7] << 0);
 
 				// Channel is going to be rewritten, will need to reset current zone/etc...
-				if (address == CODEPLUG_ADDR_CHANNEL_HEADER_EEPROM)
+				if ((channelsRewritten == false) && addressInSegment(address, length, CODEPLUG_ADDR_CHANNEL_HEADER_EEPROM, 0x1C10 /*128 first channels*/))
 				{
 					channelsRewritten = true;
 				}
-
-				if (length > 32)
+				else if ((luczRewritten == false) && addressInSegment(address, length, CODEPLUG_ADDR_LUCZ, (4 + CODEPLUG_ALL_ZONES_MAX + 1)))
 				{
-					length = 32;
+					luczRewritten = true;
 				}
 
+				if (length > (COM_REQUESTBUFFER_SIZE - 8))
+				{
+					length = (COM_REQUESTBUFFER_SIZE - 8);
+				}
 
 				// Temporary hack to prevent the QuickKeys getting overwritten by the codeplug
 				const int QUICKKEYS_BLOCK_END = (CODEPLUG_ADDR_QUICKKEYS + (CODEPLUG_QUICKKEYS_SIZE * sizeof(uint16_t)) - 1);
@@ -230,11 +421,15 @@ static void cpsHandleWriteCommand(void)
 				{
 					if (address < CODEPLUG_ADDR_QUICKKEYS)
 					{
+						TASK_UNLOCK_WRITE();
 						ok = EEPROM_Write(address, (uint8_t*)com_requestbuffer + 8, (CODEPLUG_ADDR_QUICKKEYS - address));
+						TASK_LOCK_WRITE();
 
 						if (ok && (end > QUICKKEYS_BLOCK_END))
 						{
+							TASK_UNLOCK_WRITE();
 							ok = EEPROM_Write((QUICKKEYS_BLOCK_END + 1), (uint8_t *)com_requestbuffer + 8 + ((QUICKKEYS_BLOCK_END + 1) - address),  (end - QUICKKEYS_BLOCK_END));
+							TASK_LOCK_WRITE();
 						}
 
 					}
@@ -242,7 +437,9 @@ static void cpsHandleWriteCommand(void)
 					{
 						if ((address <= QUICKKEYS_BLOCK_END) && (end > QUICKKEYS_BLOCK_END))
 						{
+							TASK_UNLOCK_WRITE();
 							ok = EEPROM_Write((QUICKKEYS_BLOCK_END + 1), (uint8_t *)com_requestbuffer + 8 + ((QUICKKEYS_BLOCK_END + 1) - address), (end - QUICKKEYS_BLOCK_END));
+							TASK_LOCK_WRITE();
 						}
 						else
 						{
@@ -253,10 +450,16 @@ static void cpsHandleWriteCommand(void)
 				}
 				else
 				{
+					TASK_UNLOCK_WRITE();
 					ok = EEPROM_Write(address, (uint8_t *)com_requestbuffer + 8, length);
+					TASK_LOCK_WRITE();
 				}
+#else
+				ok = true;
+#endif
 			}
 			break;
+
 		case CPS_ACCESS_WAV_BUFFER:// write to raw audio buffer
 			{
 				uint32_t address = (com_requestbuffer[2] << 24) + (com_requestbuffer[3] << 16) + (com_requestbuffer[4] << 8) + (com_requestbuffer[5] << 0);
@@ -266,6 +469,9 @@ static void cpsHandleWriteCommand(void)
 				memcpy((uint8_t *)&audioAndHotspotDataBuffer.rawBuffer[address], (uint8_t *)&com_requestbuffer[8], length);
 				ok = true;
 			}
+			break;
+
+		case CPS_ACCESS_RADIO_INFO:
 			break;
 	}
 
@@ -277,11 +483,60 @@ static void cpsHandleWriteCommand(void)
 	}
 	else
 	{
-		sector=-1;
+		sector = -1;
 		usbComSendBuf[0] = '-';
 		USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, 1);
 	}
+
+	watchdogRun(true);
 }
+
+#if defined(LOOKUP_ENABLED)
+static void cpsHandleLookup(void)
+{
+	bool ok = false;
+	uint32_t ID = 0;
+	dmrIdDataStruct_t ctx;
+	char buf[80];
+
+	ID = atoi((char *)&com_requestbuffer[1]);
+
+	if (dmrIDLookup(ID, &ctx))
+	{
+		snprintf(buf, sizeof(buf), "L%d %s\n", ID, ctx.text);
+		memcpy(usbComSendBuf, buf, strlen(buf));
+		ok = true;
+	}
+
+	if (ok)
+	{
+		USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, strlen(buf));
+	}
+	else
+	{
+		usbComSendBuf[0] = '-';
+		usbComSendBuf[1] = '\n';
+		usbComSendBuf[2] = 0;
+		USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, 3);
+	}
+}
+#endif
+
+#if defined(HAS_GPS)
+static void cpsStopGPSNMEA(void)
+{
+	if (SETTINGS_GPS_MODE_GET(nonVolatileSettings) >= GPS_MODE_ON_NMEA)
+	{
+#if defined(LOG_GPS_DATA)
+		TASK_UNLOCK_WRITE();
+		gpsLoggingStop();
+		TASK_LOCK_WRITE();
+#endif
+		previousGPSState = SETTINGS_GPS_MODE_GET(nonVolatileSettings);
+		nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, GPS_MODE_ON);
+	}
+}
+#endif
 
 static void cpsHandleCommand(void)
 {
@@ -289,6 +544,15 @@ static void cpsHandleCommand(void)
 	switch(command)
 	{
 		case 0:
+#if defined(HAS_GPS)
+			cpsStopGPSNMEA();
+#endif
+
+			if (menuSystemGetCurrentMenuNumber() == MENU_SATELLITE)
+			{
+				menuSystemPopAllAndDisplayRootMenu();
+			}
+
 			// Show CPS screen
 			menuSystemPushNewMenu(UI_CPS);
 			break;
@@ -315,12 +579,14 @@ static void cpsHandleCommand(void)
 				dmrIDCacheInit();
 				flashingDMRIDs = false;
 			}
+			isCompressingAMBE = false;
+			rxPowerSavingSetLevel(nonVolatileSettings.ecoLevel);
 			uiCPSUpdate(CPS2UI_COMMAND_END, 0, 0, FONT_SIZE_1, TEXT_ALIGN_LEFT, 0, NULL);
 			break;
 		case 6:
 			{
 				int subCommand = com_requestbuffer[2];
-				uint32_t m = fw_millis();
+				uint32_t m = ticksGetMillis();
 
 				// Do some other processing
 				switch(subCommand)
@@ -329,48 +595,91 @@ static void cpsHandleCommand(void)
 						// Channels has be rewritten, switch currentZone to All Channels
 						if (channelsRewritten)
 						{
-							uint16_t firstContact = 1;
+							int16_t firstContact = 1;
 
 							//
 							// Give it a bit of time before reading the zone count as DM-1801 EEPROM looks slower
 							// than GD-77 to write
-							m = fw_millis();
-							while (1U)
+							m = ticksGetMillis();
+							while (true)
 							{
-								if ((fw_millis() - m) > 50)
+								TASK_UNLOCK_WRITE();
+								vTaskDelay((10U / portTICK_PERIOD_MS));
+								TASK_LOCK_WRITE();
+
+								if ((ticksGetMillis() - m) > 50)
 								{
 									break;
 								}
 							}
 
+							TASK_UNLOCK_WRITE();
+							codeplugZonesInitCache(); // Re-read zone cache, as we're using codeplugZonesGetCount() below.
 							codeplugAllChannelsInitCache(); // Rebuild channels cache
+							TASK_LOCK_WRITE();
+
 							nonVolatileSettings.currentZone = (int16_t) (codeplugZonesGetCount() - 1); // Set to All Channels zone
 
+							TASK_UNLOCK_WRITE();
+							codeplugInitLastUsedChannelInZone(); // Re-read the LUCZ
+							TASK_LOCK_WRITE();
+
 							// Search for the first assigned contact
-							for (uint16_t i = CODEPLUG_CHANNELS_MIN; i <= CODEPLUG_CHANNELS_MAX; i++)
+							int16_t luczAllChannels = codeplugGetLastUsedChannelInZone(-1);
+							if (codeplugAllChannelsIndexIsInUse(luczAllChannels))
 							{
-								if (codeplugAllChannelsIndexIsInUse(i))
-								{
-									firstContact = i;
-									break;
-								}
-
-								// Call tick_watchdog() ??
+								firstContact = luczAllChannels;
 							}
+							else
+							{
+								for (int16_t i = CODEPLUG_CHANNELS_MIN; i <= CODEPLUG_CHANNELS_MAX; i++)
+								{
+									if (codeplugAllChannelsIndexIsInUse(i))
+									{
+										firstContact = i;
+										break;
+									}
 
+									// Call tick_watchdog() ??
+								}
+							}
+#if defined(PLATFORM_RD5R)
 							nonVolatileSettings.currentChannelIndexInAllZone = firstContact;
 							nonVolatileSettings.currentChannelIndexInZone = 0;
+#endif
+							codeplugSetLastUsedChannelInZone(-1, firstContact);
+							luczRewritten = false;
 						}
 
+#if defined(HAS_GPS)
+						// restore GPS state if needed
+						if (previousGPSState >= GPS_MODE_ON_NMEA)
+						{
+							nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, previousGPSState);
+						}
+#endif
 						// save current settings and reboot
-						m = fw_millis();
+						m = ticksGetMillis();
+						TASK_UNLOCK_WRITE();
 						settingsSaveSettings(false);// Need to save these channels prior to reboot, as reboot does not save
+						TASK_LOCK_WRITE();
+
+						if (! luczRewritten)
+						{
+							TASK_UNLOCK_WRITE();
+							codeplugSaveLastUsedChannelInZone();
+							TASK_LOCK_WRITE();
+						}
 
 						// Give it a bit of time before pulling the plug as DM-1801 EEPROM looks slower
 						// than GD-77 to write, then quickly power cycling triggers settings reset.
-						while (1U)
+						while (true)
 						{
-							if ((fw_millis() - m) > 50)
+							TASK_UNLOCK_WRITE();
+							vTaskDelay((10U / portTICK_PERIOD_MS));
+							TASK_LOCK_WRITE();
+
+							if ((ticksGetMillis() - m) > 50)
 							{
 								break;
 							}
@@ -378,11 +687,32 @@ static void cpsHandleCommand(void)
 						watchdogReboot();
 					break;
 					case 1:
+#if defined(HAS_GPS)
+						if (previousGPSState >= GPS_MODE_ON_NMEA)
+						{
+							nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, previousGPSState);
+						}
+#endif
 						watchdogReboot();
 						break;
 					case 2:
+#if defined(HAS_GPS)
+						if (previousGPSState >= GPS_MODE_ON_NMEA)
+						{
+							nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, previousGPSState);
+						}
+#endif
 						// Save settings VFO's to codeplug
+						TASK_UNLOCK_WRITE();
 						settingsSaveSettings(true);
+						TASK_LOCK_WRITE();
+
+#if defined(HAS_GPS)
+						if (previousGPSState >= GPS_MODE_ON_NMEA)
+						{
+							nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, GPS_MODE_ON);
+						}
+#endif
 						break;
 					case 3:
 						// flash green LED
@@ -393,16 +723,79 @@ static void cpsHandleCommand(void)
 						uiCPSUpdate(CPS2UI_COMMAND_RED_LED, 0, 0, FONT_SIZE_1, TEXT_ALIGN_LEFT, 0, NULL);
 						break;
 					case 5:
+						rxPowerSavingSetLevel(0);
+						isCompressingAMBE = true;
 						codecInitInternalBuffers();
 						break;
 					case 6:
 						soundInit();// Resets the sound buffers
 						memset((uint8_t *)&audioAndHotspotDataBuffer.rawBuffer[0], 0, (6 * WAV_BUFFER_SIZE));// clear 1 dmr frame size of wav buffer memory
 						break;
+					case 7:
+						memcpy(&uiDataGlobal.dateTimeSecs, (uint8_t *)&com_requestbuffer[3], sizeof(uint32_t));// update date with data from the CPS
+#if ! defined(PLATFORM_GD77S)
+						daytimeThemeChangeUpdate(true);
+#endif
+#if defined(PLATFORM_MD9600) || defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+						setRtc_custom(uiDataGlobal.dateTimeSecs);
+#endif
+						menuSatelliteScreenClearPredictions(true);
+						break;
+					// 8:
+					// 9:
+					case 10: // wait 10ms
+						m = ticksGetMillis();
+						while (true)
+						{
+							TASK_UNLOCK_WRITE();
+							settingsSaveSettings(true);
+							TASK_LOCK_WRITE();
+
+							if ((ticksGetMillis() - m) > 10)
+							{
+								break;
+							}
+						}
+						break;
 					default:
 						break;
 				}
 			}
+			break;
+		case 7:
+#if defined(HAS_GPS)
+			if (previousGPSState >= GPS_MODE_ON_NMEA)
+			{
+				nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, previousGPSState);
+				previousGPSState = GPS_NOT_DETECTED;
+#if defined(LOG_GPS_DATA)
+				TASK_UNLOCK_WRITE();
+				gpsLoggingStart();
+				TASK_LOCK_WRITE();
+#endif
+			}
+#endif
+			break;
+#if defined(DEBUG_POSITION)
+#warning DEBUG_POSITION is ENABLED
+		case 'P':
+			{
+				int lat,lon;
+				com_requestbuffer[COM_REQUESTBUFFER_SIZE-1] = 0;// terminate string ready for sscanf
+				// Command to set Lat/Lon to 0.0001 deg
+				// In the format CP NNNNNN NNNNNN
+				// e.g. CP -234567 12345678 = 23.4567S 123.4567E
+
+				sscanf((char *)&com_requestbuffer[2],"%d %d",&lat,&lon);
+				settingsSet(nonVolatileSettings.location.lat, latLonDoubleToFixed32(((double)lat) / 10000.0F));
+				settingsSet(nonVolatileSettings.location.Lon, latLonDoubleToFixed32(((double)lon) / 10000.0F));
+			}
+			break;
+#endif
+		case 254: // PING
+#if defined(HAS_GPS)
+			cpsStopGPSNMEA();
+#endif
 			break;
 		default:
 			break;
@@ -427,13 +820,48 @@ static void handleCPSRequest(void)
 		case 'C':
 			cpsHandleCommand();
 			break;
+#if defined(LOOKUP_ENABLED)
+		case 'L':
+			cpsHandleLookup();
+			break;
+#endif
+
+#if 0 // has to be rewritten
+		case '$':// NMEA
+			{
+				gpsPower(false);
+				nonVolatileSettings.gpsModeAndBaudsIndex = SETTINGS_GPS_MODE_SET(nonVolatileSettings, GPS_MODE_ON);
+				//HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+				int bufPos = 0;
+				char rxchar;
+				do
+				{
+					rxchar = com_requestbuffer[bufPos];
+					if (rxchar != 13)
+					{
+						gpsLine[bufPos] = rxchar;
+					}
+					bufPos++;
+				} while((rxchar != 13) && (bufPos < COM_REQUESTBUFFER_SIZE)) ;
+				gpsLineLength = bufPos;
+				gpsLineReady = true;
+			}
+			break;
+#endif
 		default:
 			usbComSendBuf[0] = '-';
 			USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, 1);
 			break;
 	}
 }
+
 #if 0
+__attribute__((section(".data.$RAM2"))) volatile uint8_t com_buffer[COM_BUFFER_SIZE];
+int com_buffer_write_idx = 0;
+int com_buffer_read_idx = 0;
+volatile int com_buffer_cnt = 0;
+
+
 void send_packet(uint8_t val_0x82, uint8_t val_0x86, int ram)
 {
 	taskENTER_CRITICAL();
@@ -494,20 +922,22 @@ void add_to_commbuffer(uint8_t value)
 	}
 }
 #endif
-void USB_DEBUG_PRINT(char *str)
+
+void USB_DEBUG_PRINT(const char *str)
 {
-	strcpy((char*)usbComSendBuf, str);
-	USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, strlen(str));
+	strncpy((char *)usbComSendBuf, str, COM_BUFFER_SIZE);
+	usbComSendBuf[COM_BUFFER_SIZE - 1] = 0; // SAFETY: strncpy won't NULL terminate the buffer if length was exceeding.
+
+	USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle, USB_CDC_VCOM_BULK_IN_ENDPOINT, usbComSendBuf, strlen((char *)usbComSendBuf));
 }
 
 void USB_DEBUG_printf(const char *format, ...)
 {
-	  char buf[80];
+	  char buf[COM_BUFFER_SIZE];
 	  va_list params;
 
 	  va_start(params, format);
-	  vsnprintf(buf, 77, format, params);
-	  strcat(buf, "\n");
+	  vsnprintf(buf, COM_BUFFER_SIZE, format, params);
 	  va_end(params);
 	  USB_DEBUG_PRINT(buf);
 }

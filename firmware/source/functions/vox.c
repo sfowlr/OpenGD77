@@ -1,49 +1,57 @@
 /*
- * Copyright (C)2020	Kai Ludwig, DG4KLU
- *               and	Roger Clark, VK3KYY / G4KYF
- *               and	Daniel Caujolle-Bert, F1RMB
+ * Copyright (C) 2020-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 
 #include "functions/vox.h"
 #include "interfaces/adc.h"
 #include "functions/sound.h"
 #include "functions/settings.h"
-#include "interfaces/pit.h"
+#include "functions/ticks.h"
+#include "functions/voicePrompts.h"
 #include "utils.h"
 
-
-#define PIT_COUNTS_PER_MS  10U
-
-
-static const uint32_t VOX_TAIL_TIME_UNIT = (PIT_COUNTS_PER_MS * 500); // 500ms tail unit
-static const uint16_t VOX_SETTLE_TIME = 4000; // Countdown before doing first real sampling;
+#define VOX_UPDATE_MS                 4U
+#define VOX_TAIL_TIME_UNIT           (PIT_COUNTS_PER_MS * 500U) // 500ms tail unit
+#define VOX_SETTLE_TIME              (6000U / VOX_UPDATE_MS) // Countdown before doing first real sampling;
+#define VOX_TAIL_GET_MILLISECONDS(x) (((x) > 1U) ? (((x) - 1U) * VOX_TAIL_TIME_UNIT) : 1U)
 
 typedef struct
 {
-	bool     triggered;
-	uint8_t  preTrigger;
-	uint8_t  threshold; // threshold is a super low value, 8 bits are enough
-	uint16_t sampled;
-	uint16_t averaged;
-	uint16_t noiseFloor;
-	uint32_t nextTimeSampling;
-	uint8_t  tailUnits;
-	uint32_t tailTime;
-	uint16_t settleCount;
+	uint16_t     sampled;
+	uint16_t     averaged;
+	uint16_t     noiseFloor;
+	uint16_t     sampledNoise;
+	ticksTimer_t nextTimeSamplingTimer;
+	ticksTimer_t preTriggeringTimer;
+	ticksTimer_t tailTimer;
+	uint16_t     settleCount;
+	uint8_t      threshold; // threshold is a super low value, 8 bits are enough
+	uint8_t      tailUnits;
+	bool         triggered;
 } voxData_t;
 
 static voxData_t vox;
@@ -51,9 +59,9 @@ static voxData_t vox;
 void voxInit(void)
 {
 	voxReset();
-	vox.threshold = 0;
-	vox.noiseFloor = 0;
-	vox.tailUnits = 1;
+	vox.threshold = 0U;
+	vox.noiseFloor = 0U;
+	vox.tailUnits = 2U;
 	vox.settleCount = VOX_SETTLE_TIME;
 }
 
@@ -69,7 +77,13 @@ void voxSetParameters(uint8_t threshold, uint8_t tailHalfSecond)
 
 bool voxIsEnabled(void)
 {
-	return ((currentChannelData->flag4 & 0x40) && (settingsUsbMode != USB_MODE_HOTSPOT));
+	return ((settingsIsOptionBitSet(BIT_TX_INHIBIT) == false) &&
+			(codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_VOX) != 0) &&
+			(codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) == 0) && ((nonVolatileSettings.txFreqLimited == BAND_LIMITS_NONE) || trxCheckFrequencyInAmateurBand(currentChannelData->txFreq)
+#if defined(PLATFORM_MD9600)
+					|| (codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_OUT_OF_BAND) != 0)
+#endif
+			) && (settingsUsbMode != USB_MODE_HOTSPOT));
 }
 
 bool voxIsTriggered(void)
@@ -82,21 +96,20 @@ void voxReset(void)
 	vox.triggered = false;
 	vox.sampled = 0;
 	vox.averaged = 0;
-	vox.nextTimeSampling = PITCounter + PIT_COUNTS_PER_MS; // now + 1ms
-	vox.tailTime = 0;
-	vox.settleCount = VOX_SETTLE_TIME >> 1;
-	vox.preTrigger = 0;
+	ticksTimerStart(&vox.nextTimeSamplingTimer, VOX_UPDATE_MS);
+	ticksTimerReset(&vox.tailTimer);
+	ticksTimerReset(&vox.preTriggeringTimer);
+	vox.settleCount = (VOX_SETTLE_TIME >> 1);
+	vox.sampledNoise = 0U;
 }
 
 void voxTick(void)
 {
-	static uint16_t sampledNoise = 0;
-
 	if (voxIsEnabled())
 	{
-		if (PITCounter >= vox.nextTimeSampling)
+		if (ticksTimerHasExpired(&vox.nextTimeSamplingTimer))
 		{
-			if ((getAudioAmpStatus() & (AUDIO_AMP_MODE_RF | AUDIO_AMP_MODE_BEEP)))
+			if ((audioAmpGetStatus() & (AUDIO_AMP_CHANNEL_RF | AUDIO_AMP_CHANNEL_BEEP | AUDIO_AMP_CHANNEL_PROMPT)))
 			{
 				voxReset();
 			}
@@ -114,38 +127,48 @@ void voxTick(void)
 				vox.averaged = (vox.sampled + (1 << (2 - 1))) >> 2;
 				vox.sampled -= vox.averaged;
 
-				if (vox.averaged >= (vox.noiseFloor + vox.threshold))
+				if ((vox.averaged > 0) && (vox.noiseFloor > 0) && (vox.averaged >= (vox.noiseFloor + vox.threshold)))
 				{
-					vox.preTrigger = SAFE_MIN((vox.preTrigger + 1), 100);
+					if (ticksTimerIsEnabled(&vox.preTriggeringTimer) == false)
+					{
+						ticksTimerStart(&vox.preTriggeringTimer, 100U);
+					}
 
 					// We need 100ms of level above the noise to trigger the VOX
-					if (vox.preTrigger >= 100)
+					if (ticksTimerHasExpired(&vox.preTriggeringTimer))
 					{
 						vox.triggered = true;
-						vox.tailTime = PITCounter + (vox.tailUnits * VOX_TAIL_TIME_UNIT);
+						ticksTimerStart(&vox.tailTimer, (VOX_TAIL_GET_MILLISECONDS(vox.tailUnits) + VOX_UPDATE_MS));
 					}
 				}
 				else
 				{
+					// it was pre-triggered, but not long enough to trigger the vox, reset the pre-trigger timer
+					if (ticksTimerIsEnabled(&vox.preTriggeringTimer) && ticksTimerHasExpired(&vox.preTriggeringTimer) && (vox.triggered == false))
+					{
+						ticksTimerReset(&vox.preTriggeringTimer);
+					}
+
 					// Noise is sampled all the time, when the transceiver is silent, and not XMitting
-					if (vox.triggered == false)
+					// Except when it's pre-trigged
+					if (ticksTimerIsEnabled(&vox.preTriggeringTimer) == false)
 					{
 						// Noise floor averaging
-						sampledNoise += sample;
-						vox.noiseFloor = (sampledNoise + (1 << (2 - 1))) >> 2;
-						sampledNoise -= vox.noiseFloor;
+						vox.sampledNoise += sample;
+						vox.noiseFloor = (vox.sampledNoise + (1 << (2 - 1))) >> 2;
+						vox.sampledNoise -= vox.noiseFloor;
 					}
 				}
 			}
 
-			vox.nextTimeSampling = PITCounter + PIT_COUNTS_PER_MS; // now + 1ms
+			ticksTimerStart(&vox.nextTimeSamplingTimer, VOX_UPDATE_MS);
 		}
 
-		if ((vox.tailTime != 0) && (PITCounter >= vox.tailTime))
+		if (ticksTimerIsEnabled(&vox.tailTimer) && ticksTimerHasExpired(&vox.tailTimer))
 		{
 			vox.triggered = false;
-			vox.tailTime = 0;
-			vox.preTrigger = 0;
+			ticksTimerReset(&vox.tailTimer);
+			ticksTimerReset(&vox.preTriggeringTimer);
 		}
 	}
 
@@ -153,5 +176,4 @@ void voxTick(void)
 	{
 		voxReset();
 	}
-
 }

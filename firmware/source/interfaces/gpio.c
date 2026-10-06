@@ -1,9 +1,32 @@
 /*
- * Copyright (C)2020 Roger Clark VK3KYY
+ * Copyright (C) 2020-2025 Roger Clark, VK3KYY / G4KYF
+ *
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  */
 
 #include "interfaces/gpio.h"
+#include "main.h"
 
 gpio_pin_config_t pin_config_input =
 {
@@ -30,7 +53,7 @@ void gpioInitButtons(void)
 	GPIO_PinInit(GPIO_PTT, Pin_PTT, &pin_config_input);
 	GPIO_PinInit(GPIO_SK1, Pin_SK1, &pin_config_input);
 	GPIO_PinInit(GPIO_SK2, Pin_SK2, &pin_config_input);
-	#if ! defined(PLATFORM_RD5R)
+#if ! defined(PLATFORM_RD5R)
 	GPIO_PinInit(GPIO_Orange, Pin_Orange, &pin_config_input);
 #endif
 }
@@ -87,9 +110,21 @@ void gpioInitCommon(void)
 
     GPIO_PinWrite(GPIO_UHF_TX_amp_power, Pin_UHF_TX_amp_power, 0);
     GPIO_PinWrite(GPIO_VHF_TX_amp_power, Pin_VHF_TX_amp_power, 0);
+
+#if defined(HAS_GPS)
+    PORT_SetPinMux(Port_GPS_Data, Pin_GPS_Data, kPORT_MuxAlt3);// D6  physical pin 99 Alt 3 UART0_RX
+#if ! defined(PLATFORM_RD5R)
+    // Make sure the adjacent pins to the GPS data and power pins are floating, in case of bridging with solder when attaching the GPS wires
+    PORT_SetPinMux(Port_GPS_Floating1, Pin_GPS_Floating1, kPORT_PinDisabledOrAnalog);
+    PORT_SetPinMux(Port_GPS_Floating2, Pin_GPS_Floating2, kPORT_PinDisabledOrAnalog);
+    PORT_SetPinMux(Port_GPS_Power, Pin_GPS_Power, kPORT_MuxAsGpio);// D6  physical pin 97 Alt 3 UART0_RX
+    GPIO_PinInit(GPIO_GPS_Power, Pin_GPS_Power, &pin_config_output);
+    GPIO_PinWrite(GPIO_GPS_Power, Pin_GPS_Power, 0);
+#endif
+#endif
 }
 
-void gpioInitDisplay()
+void gpioInitDisplay(void)
 {
 #if ! defined(PLATFORM_GD77S)
 	PORT_SetPinMux(Port_Display_CS, Pin_Display_CS, kPORT_MuxAsGpio);
@@ -255,8 +290,11 @@ void gpioInitC6000Interface(void)
     GPIO_PinInit(GPIO_INT_C6000_TS, Pin_INT_C6000_TS, &pin_config_input);
 
     // Connections with C6000
-    PORT_SetPinMux(Port_INT_C6000_RESET, Pin_INT_C6000_RESET, kPORT_MuxAsGpio);
-    PORT_SetPinMux(Port_INT_C6000_PWD, Pin_INT_C6000_PWD, kPORT_MuxAsGpio);
-    GPIO_PinInit(GPIO_INT_C6000_RESET, Pin_INT_C6000_RESET, &pin_config_output);
-    GPIO_PinInit(GPIO_INT_C6000_PWD, Pin_INT_C6000_PWD, &pin_config_output);
+    PORT_SetPinMux(Port_C6000_RESET, Pin_C6000_RESET, kPORT_MuxAsGpio);
+    PORT_SetPinMux(Port_C6000_PWD, Pin_C6000_PWD, kPORT_MuxAsGpio);
+    GPIO_PinInit(GPIO_C6000_RESET, Pin_C6000_RESET, &pin_config_output);
+    GPIO_PinInit(GPIO_C6000_PWD, Pin_C6000_PWD, &pin_config_output);
 }
+
+
+

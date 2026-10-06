@@ -1,71 +1,115 @@
 /*
- * Copyright (C)2019 Roger Clark. VK3KYY / G4KYF
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 #include "hardware/HR-C6000.h"
-#include "functions/settings.h"
 #include "functions/sound.h"
 #include "user_interface/menuSystem.h"
 #include "user_interface/uiUtilities.h"
 #include "user_interface/uiLocalisation.h"
-
 #include "interfaces/clockManager.h"
-
-typedef enum
-{
-	TXSTOP_TIMEOUT,
-	TXSTOP_RX_ONLY,
-	TXSTOP_OUT_OF_BAND
-} txTerminationReason_t;
+#include "functions/satellite.h"
+#if defined(HAS_GPS)
+#include "interfaces/gps.h"
+#endif
+#if !defined(PLATFORM_GD77S)
+#include "functions/aprs.h"
+#endif
 
 static void updateScreen(void);
 static void handleEvent(uiEvent_t *ev);
-static void handleTxTermination(uiEvent_t *ev, txTerminationReason_t reason);
 
-static const int PIT_COUNTS_PER_SECOND = 10000;
+#define PIT_COUNTS_PER_SECOND    1000U
+
 static int timeInSeconds;
-static uint32_t nextSecondPIT;
+static ticksTimer_t nextSecondTimer = { 0, 0 };
 static bool isShowingLastHeard;
 static bool startBeepPlayed;
 static uint32_t m = 0, micm = 0, mto = 0;
-static uint32_t xmitErrorTimer = 0;
 static bool keepScreenShownOnError = false;
 static bool pttWasReleased = false;
 static bool isTransmittingTone = false;
-
-
+static bool isTransmittingDTMF = false;
+static bool aprsPTTBeaconTriggered = false;
+static bool transmitError = false;
+uint32_t xmitErrorTimer = 0;
+static bool isSatelliteScreen;
 
 menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 {
+	int radioMode = trxGetMode();
 
 	if (isFirstRun)
 	{
-		voicePromptsTerminate();
+#if !defined(PLATFORM_GD77S)
+		bool isSatelliteAPRS = false;
+#endif
+
+		monitorModeData.isEnabled = false;
+		voicePromptsTerminateNoTail();
 		startBeepPlayed = false;
+		aprsPTTBeaconTriggered = false;
+		transmitError = false;
 		uiDataGlobal.Scan.active = false;
+		uiDataGlobal.displayChannelSettings = false;
 		isTransmittingTone = false;
+		isTransmittingDTMF = false;
 		isShowingLastHeard = false;
 		keepScreenShownOnError = false;
 		timeInSeconds = 0;
 		pttWasReleased = false;
+		xmitErrorTimer = 0;
+		isSatelliteScreen = false;
+		ticksTimerReset(&nextSecondTimer);
 
-		if (trxGetMode() == RADIO_MODE_DIGITAL)
+		if (radioMode == RADIO_MODE_DIGITAL)
 		{
-			clockManagerSetRunMode(kAPP_PowerModeHsrun);
+			clockManagerSetRunMode(kAPP_PowerModeHsrun, CLOCK_MANAGER_SPEED_HS_RUN);
 		}
+		else
+		{
+			isSatelliteScreen = (menuSystemGetPreviousMenuNumber() == MENU_SATELLITE);
+
+#if !defined(PLATFORM_GD77S)
+			isSatelliteAPRS = (isSatelliteScreen && (currentSatelliteFreqIndex == SATELLITE_APRS_FREQ));
+
+			if (isSatelliteAPRS && (aprsBeaconingHasSatelliteConfiguration() == false))
+			{
+				PTTToggledDown = false;
+				voxReset();
+				menuSystemPopPreviousMenu();
+
+				return MENU_STATUS_SUCCESS;
+			}
+#endif
+		}
+
+#if defined(PLATFORM_GD77S)
+		uiChannelModeHeartBeatActivityForGD77S(ev); // Dim all lit LEDs
+#endif
 
 		// If the user was currently entering a new frequency and the PTT get pressed, "leave" that input screen.
 		if (uiDataGlobal.FreqEnter.index > 0)
@@ -74,51 +118,90 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 			updateScreen();
 		}
 
-		if (((currentChannelData->flag4 & 0x04) == 0x00) && ((nonVolatileSettings.txFreqLimited == BAND_LIMITS_NONE) || trxCheckFrequencyInAmateurBand(currentChannelData->txFreq)))
+		if ((codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) == 0) && ((nonVolatileSettings.txFreqLimited == BAND_LIMITS_NONE) || trxCheckFrequencyInAmateurBand(currentChannelData->txFreq)
+#if defined(PLATFORM_MD9600)
+				|| (codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_OUT_OF_BAND) != 0)
+#endif
+		))
 		{
-			nextSecondPIT = PITCounter + PIT_COUNTS_PER_SECOND;
+			ticksTimerStart(&nextSecondTimer, PIT_COUNTS_PER_SECOND);
 			timeInSeconds = currentChannelData->tot * 15;
 
-			LEDs_PinWrite(GPIO_LEDgreen, Pin_LEDgreen, 0);
-			LEDs_PinWrite(GPIO_LEDred, Pin_LEDred, 1);
+#if defined(HAS_GPS)
+			if (SETTINGS_GPS_MODE_GET(nonVolatileSettings) > GPS_MODE_OFF)
+			{
+				gpsDataInputStartStop(false);
+			}
+#endif
 
-			txstopdelay = 0;
-			clearIsWakingState();
-			if (trxGetMode() == RADIO_MODE_ANALOG)
+			LedWrite(LED_GREEN, 0);
+			LedWrite(LED_RED, 1);
+
+			HRC6000ClearIsWakingState();
+
+			if (radioMode == RADIO_MODE_ANALOG)
 			{
 				trxSetTxCSS(currentChannelData->txTone);
+
+				if (isSatelliteScreen)
+				{
+					// Make sure Tx freq is updated before transmission is enabled
+					trxSetFrequency(currentChannelData->rxFreq, currentChannelData->txFreq, DMR_MODE_AUTO);
+				}
+
 				trxSetTX();
+
+#if !defined(PLATFORM_GD77S)
+				if (isSatelliteAPRS)
+				{
+					// TXDelay
+					uint32_t m = ticksGetMillis();
+					while((ticksGetMillis() - m) < APRS_XMIT_TX_DELAY)
+					{
+						vTaskDelay((1U / portTICK_PERIOD_MS));
+					}
+
+					// APRS
+					aprsBeaconingSendBeacon(true, false);
+				}
+#endif
 			}
 			else
 			{
+				if (settingsLocationIsValid())
+				{
+					HRC6000SetTalkerAliasLocation(nonVolatileSettings.location.lat, nonVolatileSettings.location.lon);
+				}
+
 				// RADIO_MODE_DIGITAL
-				if (!((slot_state >= DMR_STATE_REPEATER_WAKE_1) && (slot_state <= DMR_STATE_REPEATER_WAKE_3)) )
+				if (!((slotState >= DMR_STATE_REPEATER_WAKE_1) && (slotState <= DMR_STATE_REPEATER_WAKE_3)) )
 				{
 					trxSetTX();
 				}
 			}
 
-			updateScreen();
+#if !defined(PLATFORM_GD77S)
+			if ((isSatelliteScreen == false) || (isSatelliteScreen && (aprsBeaconingIsTransmitting() == false)))
+#endif
+			{
+				updateScreen();
+			}
 		}
 		else
 		{
-			handleTxTermination(ev, (((currentChannelData->flag4 & 0x04) != 0x00) ? TXSTOP_RX_ONLY : TXSTOP_OUT_OF_BAND));
+			menuTxScreenHandleTxTermination(ev, ((codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) != 0) ? TXSTOP_RX_ONLY : TXSTOP_OUT_OF_BAND));
+			transmitError = true;
 		}
 
 		m = micm = ev->time;
 	}
 	else
 	{
-
-#if defined(PLATFORM_GD77S)
-		uiChannelModeHeartBeatActivityForGD77S(ev);
-#endif
-
 		// Keep displaying the "RX Only" or "Out Of Band" error message
 		if (xmitErrorTimer > 0)
 		{
 			// Wait the voice ends, then count-down 200ms;
-			if (nonVolatileSettings.audioPromptMode >= AUDIO_PROMPT_MODE_VOICE_LEVEL_1)
+			if (nonVolatileSettings.audioPromptMode >= AUDIO_PROMPT_MODE_VOICE_THRESHOLD)
 			{
 				if (voicePromptsIsPlaying())
 				{
@@ -139,10 +222,30 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 			}
 		}
 
-		if (trxTransmissionEnabled && (getIsWakingState() == WAKING_MODE_NONE))
+#if !defined(PLATFORM_GD77S)
+		// APRS Beaconing is running
+		if (trxTransmissionEnabled)
 		{
-			if (PITCounter >= nextSecondPIT)
+			// while in satellite mode => no screen redrawing, just waiting for the process ends, the rest is handled in the APRS subsystem.
+			if ((isSatelliteScreen && (currentSatelliteFreqIndex == SATELLITE_APRS_FREQ) && aprsBeaconingIsTransmitting()) ||
+					// While PTT beaconing is enabled, the rest is handled in the aprs subsystem.
+					((isSatelliteScreen == false) && (aprsBeaconingGetMode() == APRS_BEACONING_MODE_PTT) && aprsBeaconingIsTransmitting()))
 			{
+				if (ticksTimerHasExpired(&nextSecondTimer))
+				{
+					ticksTimerStart(&nextSecondTimer, PIT_COUNTS_PER_SECOND);
+				}
+				return MENU_STATUS_SUCCESS;
+			}
+		}
+#endif
+
+		if (trxTransmissionEnabled && ((HRC6000GetIsWakingState() == WAKING_MODE_NONE) || (HRC6000GetIsWakingState() == WAKING_MODE_AWAKEN)))
+		{
+			if (ticksTimerHasExpired(&nextSecondTimer))
+			{
+				ticksTimerStart(&nextSecondTimer, PIT_COUNTS_PER_SECOND);
+
 				if (currentChannelData->tot == 0)
 				{
 					timeInSeconds++;
@@ -161,7 +264,7 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 
 				if ((currentChannelData->tot != 0) && (timeInSeconds == 0))
 				{
-					handleTxTermination(ev, TXSTOP_TIMEOUT);
+					menuTxScreenHandleTxTermination(ev, TXSTOP_TIMEOUT);
 					keepScreenShownOnError = true;
 				}
 				else
@@ -171,17 +274,13 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 						updateScreen();
 					}
 				}
-
-				nextSecondPIT = PITCounter + PIT_COUNTS_PER_SECOND;
 			}
 			else
 			{
-				int mode = trxGetMode();
-
-				if (mode == RADIO_MODE_DIGITAL)
+				if (radioMode == RADIO_MODE_DIGITAL)
 				{
 					if ((nonVolatileSettings.beepOptions & BEEP_TX_START) &&
-							(startBeepPlayed == false) && (trxIsTransmitting == true)
+							(startBeepPlayed == false) && trxIsTransmitting
 							&& (melody_play == NULL))
 					{
 						startBeepPlayed = true;// set this even if the beep is not actaully played because of the vox, as otherwise this code will get continuously run
@@ -194,21 +293,26 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 				}
 
 				// Do not update Mic level on Timeout.
-				if ((((currentChannelData->tot != 0) && (timeInSeconds == 0)) == false) && (ev->time - micm) > 100)
+#if !defined(PLATFORM_GD77S)
+				if (aprsBeaconingIsTransmitting() == false)
 				{
-					if (mode == RADIO_MODE_DIGITAL)
+					if (((((currentChannelData->tot != 0) && (timeInSeconds == 0)) == false) && (ev->time - micm) > 100))
 					{
-						uiUtilityDrawDMRMicLevelBarGraph();
-					}
-					else
-					{
-						uiUtilityDrawFMMicLevelBarGraph();
-					}
+						if (radioMode == RADIO_MODE_DIGITAL)
+						{
+							uiUtilityDrawDMRMicLevelBarGraph();
+						}
+						else
+						{
+							uiUtilityDrawFMMicLevelBarGraph();
+						}
 
-					ucRenderRows(1, 2);
-					micm = ev->time;
+						displayRenderRows(1, 2);;//return;// don't do anything as it will affect the transmission !
+
+						micm = ev->time;
+					}
 				}
-
+#endif
 			}
 		}
 
@@ -217,7 +321,7 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 		if (((currentChannelData->tot != 0) && (timeInSeconds == 0)) || keepScreenShownOnError)
 		{
 			// Wait the voice ends, then count-down 500ms;
-			if (nonVolatileSettings.audioPromptMode >= AUDIO_PROMPT_MODE_VOICE_LEVEL_1)
+			if (nonVolatileSettings.audioPromptMode >= AUDIO_PROMPT_MODE_VOICE_THRESHOLD)
 			{
 				if (voicePromptsIsPlaying())
 				{
@@ -249,8 +353,6 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 		{
 			ev->buttons &= ~BUTTON_PTT;
 		}
-		//
-
 
 		// Got an event, or
 		if (ev->hasEvent || // PTT released, Timeout triggered,
@@ -263,10 +365,10 @@ menuStatus_t menuTxScreen(uiEvent_t *ev, bool isFirstRun)
 		}
 		else
 		{
-			if ((getIsWakingState() == WAKING_MODE_FAILED) && (trxTransmissionEnabled == true))
+			if ((HRC6000GetIsWakingState() == WAKING_MODE_FAILED) && trxTransmissionEnabled)
 			{
 				trxTransmissionEnabled = false;
-				handleTxTermination(ev, TXSTOP_TIMEOUT);
+				menuTxScreenHandleTxTermination(ev, TXSTOP_TIMEOUT);
 				keepScreenShownOnError = true;
 			}
 		}
@@ -281,50 +383,107 @@ bool menuTxScreenDisplaysLastHeard(void)
 
 static void updateScreen(void)
 {
+#if !defined(PLATFORM_GD77S)
 	uiDataGlobal.displayQSOState = QSO_DISPLAY_DEFAULT_SCREEN;
-	if (menuDataGlobal.controlData.stack[0] == UI_VFO_MODE)
+
+	if (isSatelliteScreen)
 	{
-		uiVFOModeUpdateScreen(timeInSeconds);
+		menuSatelliteTxScreen(timeInSeconds);
 	}
 	else
 	{
-		uiChannelModeUpdateScreen(timeInSeconds);
+		if (menuSystemGetRootMenuNumber() == UI_VFO_MODE)
+		{
+			uiVFOModeUpdateScreen(timeInSeconds);
+		}
+		else
+		{
+			uiChannelModeUpdateScreen(timeInSeconds);
+		}
 	}
 
 	if (nonVolatileSettings.backlightMode != BACKLIGHT_MODE_BUTTONS)
 	{
 		displayLightOverrideTimeout(-1);
 	}
+#endif
 }
 
 static void handleEvent(uiEvent_t *ev)
 {
 	// Xmiting ends (normal or timeouted)
-	if (((ev->buttons & BUTTON_PTT) == 0)
-			|| ((currentChannelData->tot != 0) && (timeInSeconds == 0)))
+	if (((ev->buttons & BUTTON_PTT) == 0) || (((currentChannelData->tot != 0) && (timeInSeconds == 0))))
 	{
 		if (trxTransmissionEnabled)
 		{
+#if !defined(PLATFORM_GD77S)
+			if ((transmitError == false) &&
+					(isSatelliteScreen == false) && (aprsBeaconingGetMode() == APRS_BEACONING_MODE_PTT) && (aprsPTTBeaconTriggered == false))
+			{
+				aprsPTTBeaconTriggered = true;
+
+				if (aprsBeaconingSendBeacon(false, false))
+				{
+					return;
+				}
+			}
+#endif
+
 			trxTransmissionEnabled = false;
-			isTransmittingTone = false;
+
+			if(isTransmittingTone || isTransmittingDTMF)
+			{
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+				trxSelectVoiceChannel(AT1846_VOICE_CHANNEL_MIC);
+				audioAmpDisable(AUDIO_AMP_CHANNEL_RF);
+#else
+
+#if defined(PLATFORM_MD9600)
+				trxDTMFoff(true);
+#else // PLATFORM_MD9600
+				if(isTransmittingDTMF)
+				{
+					trxDTMFoff(true);
+				}
+				else
+				{
+					trxSetTone1(0);
+				}
+#endif // PLATFORM_MD9600
+
+				if(soundMelodyIsPlaying())
+				{
+					soundStopMelody();
+				}
+#endif
+				isTransmittingTone = false;
+				isTransmittingDTMF = false;
+			}
 
 			if (trxGetMode() == RADIO_MODE_ANALOG)
 			{
 				// In analog mode. Stop transmitting immediately
-				LEDs_PinWrite(GPIO_LEDred, Pin_LEDred, 0);
+				LedWrite(LED_RED, 0);
+
+#if defined(HAS_GPS)
+				if (SETTINGS_GPS_MODE_GET(nonVolatileSettings) > GPS_MODE_OFF)
+				{
+					gpsDataInputStartStop(true);
+				}
+#endif
 
 				// Need to wrap this in Task Critical to avoid bus contention on the I2C bus.
 				trxSetRxCSS(currentChannelData->rxTone);
-				//taskENTER_CRITICAL();
-				trxActivateRx();
+				trxActivateRx(true);
 				trxIsTransmitting = false;
-				//taskEXIT_CRITICAL();
 
 				menuSystemPopPreviousMenu();
 				uiDataGlobal.displayQSOState = QSO_DISPLAY_DEFAULT_SCREEN; // we need immediate redraw
 			}
 			else
 			{
+				HRC6000ClearIsWakingState();
+
 				if (isShowingLastHeard)
 				{
 					isShowingLastHeard = false;
@@ -339,23 +498,32 @@ static void handleEvent(uiEvent_t *ev)
 			// In DMR mode, wait for the DMR system to finish before exiting
 			if (trxIsTransmitting == false)
 			{
-				if ((nonVolatileSettings.beepOptions & BEEP_TX_STOP) && (melody_play == NULL))
+				if ((nonVolatileSettings.beepOptions & BEEP_TX_STOP) && (melody_play == NULL) && (HRC6000GetIsWakingState() != WAKING_MODE_FAILED))
 				{
 					soundSetMelody(MELODY_DMR_TX_STOP_BEEP);
 				}
 
-				LEDs_PinWrite(GPIO_LEDred, Pin_LEDred, 0);
+				LedWrite(LED_RED, 0);
+
+#if defined(HAS_GPS)
+				if (SETTINGS_GPS_MODE_GET(nonVolatileSettings) > GPS_MODE_OFF)
+				{
+					gpsDataInputStartStop(true);
+				}
+#endif
 
 				// If there is a signal, lit the Green LED
-				if ((LEDs_PinRead(GPIO_LEDgreen, Pin_LEDgreen) == 0) && (trxCarrierDetected() || (getAudioAmpStatus() & AUDIO_AMP_MODE_RF)))
+				if ((LedRead(LED_GREEN) == 0) && (trxCarrierDetected() || (audioAmpGetStatus() & AUDIO_AMP_CHANNEL_RF)))
 				{
-					LEDs_PinWrite(GPIO_LEDgreen, Pin_LEDgreen, 1);
+					LedWrite(LED_GREEN, 1);
 				}
 
 				if (trxGetMode() == RADIO_MODE_DIGITAL)
 				{
-					clockManagerSetRunMode(kAPP_PowerModeRun);
+					clockManagerSetRunMode(kAPP_PowerModeRun, CLOCK_MANAGER_SPEED_RUN);
 				}
+
+				HRC6000ClearIsWakingState();
 
 				menuSystemPopPreviousMenu();
 				uiDataGlobal.displayQSOState = QSO_DISPLAY_DEFAULT_SCREEN; // we need immediate redraw
@@ -367,41 +535,110 @@ static void handleEvent(uiEvent_t *ev)
 	}
 
 	// Key action while xmitting (ANALOG), Tone triggering
-	if (!isTransmittingTone && ((ev->buttons & BUTTON_PTT) != 0) && trxTransmissionEnabled && (trxGetMode() == RADIO_MODE_ANALOG))
+	if ((isTransmittingTone == false) && (isTransmittingDTMF == false) &&
+			((ev->buttons & BUTTON_PTT) != 0) && trxTransmissionEnabled && (trxGetMode() == RADIO_MODE_ANALOG))
 	{
+		int keyval = menuGetKeypadKeyValue(ev, false);
 		// Send 1750Hz
 		if (BUTTONCHECK_DOWN(ev, BUTTON_SK2))
 		{
-			isTransmittingTone = true;
-			trxSetTone1(1750);
-			trxSelectVoiceChannel(AT1846_VOICE_CHANNEL_TONE1);
-			enableAudioAmp(AUDIO_AMP_MODE_RF);
-			GPIO_PinWrite(GPIO_RX_audio_mux, Pin_RX_audio_mux, 1);
+			if (isSatelliteScreen)
+			{
+				if (satelliteDataNative[uiDataGlobal.SatelliteAndAlarmData.currentSatellite].freqs[currentSatelliteFreqIndex].armCTCSS != 0)
+				{
+					trxActivateRx(true);
+					trxSetTxCSS(satelliteDataNative[uiDataGlobal.SatelliteAndAlarmData.currentSatellite].freqs[currentSatelliteFreqIndex].armCTCSS);
+					trxSetTX();
+				}
+			}
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+			else
+			{
+				trxSetTone1(1750);
+				trxSelectVoiceChannel(AT1846_VOICE_CHANNEL_TONE1);
+				audioAmpEnable(AUDIO_AMP_CHANNEL_RF);
+				GPIO_PinWrite(GPIO_RX_audio_mux, Pin_RX_audio_mux, 1);
+				isTransmittingTone = true;
+			}
+#elif ! defined(PLATFORM_MD9600)
+			else
+			{	//send 1750
+				trxSetTone1(1750);
+				soundSetMelody(MELODY_1750);
+				isTransmittingTone = true;
+			}
+#endif
 		}
+#if defined(PLATFORM_MD9600)
+		else if ((keyval == 16)	&& (isSatelliteScreen == false)) // A/B key
+		{	//send 1750
+			trxSetTone1(1750);
+			soundSetMelody(MELODY_1750);
+			isTransmittingTone = true;
+		}
+#endif
 		else
-		{ // Send DTMF
-			int keyval = menuGetKeypadKeyValue(ev, false);
-
-			if (keyval != 99)
+		{	// Send DTMF
+			if ((keyval != 99) && (isSatelliteScreen == false))
 			{
 				trxSetDTMF(keyval);
-				isTransmittingTone = true;
+				isTransmittingDTMF = true;
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
 				trxSelectVoiceChannel(AT1846_VOICE_CHANNEL_DTMF);
-				enableAudioAmp(AUDIO_AMP_MODE_RF);
+				audioAmpEnable(AUDIO_AMP_CHANNEL_RF);
 				GPIO_PinWrite(GPIO_RX_audio_mux, Pin_RX_audio_mux, 1);
+#else
+				soundSetMelody(MELODY_DTMF);
+#endif
 			}
 		}
 	}
 
 	// Stop xmitting Tone
-	if (isTransmittingTone && (BUTTONCHECK_DOWN(ev, BUTTON_SK2) == 0) && ((ev->keys.key == 0) || (ev->keys.event & KEY_MOD_UP)))
+	if ((isTransmittingTone || isTransmittingDTMF) && (BUTTONCHECK_DOWN(ev, BUTTON_SK2) == 0) && ((ev->keys.key == 0) || (ev->keys.event & KEY_MOD_UP)))
 	{
+		if (isSatelliteScreen)
+		{
+			if (satelliteDataNative[uiDataGlobal.SatelliteAndAlarmData.currentSatellite].freqs[currentSatelliteFreqIndex].armCTCSS != 0)
+			{
+				trxActivateRx(true);
+				trxSetTxCSS(currentChannelData->txTone);
+				trxSetTX();
+			}
+		}
+		else
+		{
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+			trxSelectVoiceChannel(AT1846_VOICE_CHANNEL_MIC);
+			audioAmpDisable(AUDIO_AMP_CHANNEL_RF);
+#else
+
+#if defined(PLATFORM_MD9600)
+			trxDTMFoff(true);
+#else // PLATFORM_MD9600
+			if(isTransmittingDTMF)
+			{
+				trxDTMFoff(true);
+			}
+			else
+			{
+				trxSetTone1(0);
+			}
+#endif // PLATFORM_MD9600
+
+			if(soundMelodyIsPlaying())
+			{
+				soundStopMelody();
+			}
+#endif
+		}
+
 		isTransmittingTone = false;
-		trxSelectVoiceChannel(AT1846_VOICE_CHANNEL_MIC);
-		disableAudioAmp(AUDIO_AMP_MODE_RF);
+		isTransmittingDTMF = false;
 	}
 
-	if ((trxGetMode() == RADIO_MODE_DIGITAL) && BUTTONCHECK_SHORTUP(ev, BUTTON_SK1) && (trxTransmissionEnabled == true))
+#if !defined(PLATFORM_GD77S)
+	if ((trxGetMode() == RADIO_MODE_DIGITAL) && BUTTONCHECK_SHORTUP(ev, BUTTON_SK1) && trxTransmissionEnabled)
 	{
 		isShowingLastHeard = !isShowingLastHeard;
 		if (isShowingLastHeard)
@@ -420,54 +657,80 @@ static void handleEvent(uiEvent_t *ev)
 	{
 		menuLastHeardHandleEvent(ev);
 	}
+#endif
 
 }
 
-static void handleTxTermination(uiEvent_t *ev, txTerminationReason_t reason)
+void menuTxScreenHandleTxTermination(uiEvent_t *ev, txTerminationReason_t reason)
 {
 	PTTToggledDown = false;
 	voxReset();
 
-	ucClearBuf();
-
-	voicePromptsTerminate();
+	voicePromptsTerminateNoTail();
 	voicePromptsInit();
 
-	ucDrawRoundRectWithDropShadow(4, 4, 120, (DISPLAY_SIZE_Y - 6), 5, true);
+#if !defined(PLATFORM_GD77S)
+	displayClearBuf();
+	displayThemeApply(THEME_ITEM_FG_DECORATION, THEME_ITEM_BG_NOTIFICATION);
+	displayDrawRoundRectWithDropShadow(4, 4, 120 + DISPLAY_H_EXTRA_PIXELS, (DISPLAY_SIZE_Y - 6), 5, true);
+#endif
 
 	switch (reason)
 	{
 		case TXSTOP_RX_ONLY:
 		case TXSTOP_OUT_OF_BAND:
-			ucPrintCentered(4, currentLanguage->error, FONT_SIZE_4);
+#if !defined(PLATFORM_GD77S)
+			displayThemeApply(THEME_ITEM_FG_ERROR_NOTIFICATION, THEME_ITEM_BG_NOTIFICATION);
+			displayPrintCentered(4 + (DISPLAY_V_EXTRA_PIXELS / 4), currentLanguage->error, FONT_SIZE_4);
+#endif
 
-			voicePromptsAppendLanguageString(&currentLanguage->error);
+			voicePromptsAppendLanguageString(currentLanguage->error);
 			voicePromptsAppendPrompt(PROMPT_SILENCE);
 
-			if ((currentChannelData->flag4 & 0x04) != 0x00)
+			if (codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) != 0)
 			{
-				ucPrintCentered((DISPLAY_SIZE_Y - 24), currentLanguage->rx_only, FONT_SIZE_3);
-				voicePromptsAppendLanguageString(&currentLanguage->rx_only);
+#if !defined(PLATFORM_GD77S)
+				displayPrintCentered((DISPLAY_SIZE_Y - 24) - (DISPLAY_V_EXTRA_PIXELS / 4), currentLanguage->rx_only, FONT_SIZE_3);
+#endif
+				voicePromptsAppendLanguageString(currentLanguage->rx_only);
 			}
 			else
 			{
-				ucPrintCentered((DISPLAY_SIZE_Y - 24), currentLanguage->out_of_band, FONT_SIZE_3);
-				voicePromptsAppendLanguageString(&currentLanguage->out_of_band);
+#if !defined(PLATFORM_GD77S)
+				displayPrintCentered((DISPLAY_SIZE_Y - 24) - (DISPLAY_V_EXTRA_PIXELS / 4), currentLanguage->out_of_band, FONT_SIZE_3);
+#endif
+				voicePromptsAppendLanguageString(currentLanguage->out_of_band);
 			}
 			xmitErrorTimer = (100 * 10U);
 			break;
 
 		case TXSTOP_TIMEOUT:
-			ucPrintCentered(16, currentLanguage->timeout, FONT_SIZE_4);
-			voicePromptsAppendLanguageString(&currentLanguage->timeout);
-			mto = ev->time;
+#if !defined(PLATFORM_GD77S)
+			displayThemeApply(THEME_ITEM_FG_WARNING_NOTIFICATION, THEME_ITEM_BG_NOTIFICATION);
+			displayPrintCentered(((DISPLAY_SIZE_Y - FONT_SIZE_4_HEIGHT) / 2), currentLanguage->timeout, FONT_SIZE_4);
+#endif
+
+			// From G4EML commit:
+			//      Timeout Voice Prompt doesn't work on DMR.  It actually sends a distorted version of the prompt on the transmission.
+			//      Presumably because the codec cant handle encoding and decoding at the same time.
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+			voicePromptsAppendLanguageString(currentLanguage->timeout);
+#endif
+
+			if (menuSystemGetCurrentMenuNumber() == UI_TX_SCREEN)
+			{
+				mto = ev->time;
+			}
 			break;
 	}
 
-	ucRender();
+#if !defined(PLATFORM_GD77S)
+	displayThemeResetToDefault();
+	displayRender();
 	displayLightOverrideTimeout(-1);
+#endif
 
-	if (nonVolatileSettings.audioPromptMode < AUDIO_PROMPT_MODE_VOICE_LEVEL_1)
+	if ((nonVolatileSettings.audioPromptMode < AUDIO_PROMPT_MODE_VOICE_THRESHOLD) || (reason == TXSTOP_TIMEOUT))
 	{
 		soundSetMelody((reason == TXSTOP_TIMEOUT) ? MELODY_TX_TIMEOUT_BEEP : MELODY_ERROR_BEEP);
 	}

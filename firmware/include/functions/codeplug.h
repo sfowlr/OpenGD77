@@ -1,19 +1,30 @@
 /*
- * Copyright (C)2019 Roger Clark. VK3KYY / G4KYF
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 #ifndef _OPENGD77_CODEPLUG_H_
 #define _OPENGD77_CODEPLUG_H_
@@ -28,16 +39,23 @@ extern const int CODEPLUG_MIN_VARIABLE_SQUELCH;
 extern const int CODEPLUG_MIN_PER_CHANNEL_POWER;
 
 extern const int VFO_FREQ_STEP_TABLE[8];
+extern const int VFO_SWEEP_SCAN_RANGE_SAMPLE_STEP_TABLE[7];
 
 #define CODEPLUG_ADDR_QUICKKEYS                                0x7524 // LSB,HSB
 #define CODEPLUG_QUICKKEYS_SIZE                                    10
+extern const int CODEPLUG_ADDR_VFO_A_CHANNEL;
+extern const int CPS_CODEPLUG_SECTION_2_START;
 
-
+// APRS Config
+#define CODEPLUG_APRS_CONFIG_DATA_STRUCT_SIZE                      64U
 
 // Zone
 #define CODEPLUG_ZONE_DATA_ORIGINAL_STRUCT_SIZE                    48 // 16 channels per zone
 #define CODEPLUG_ZONE_DATA_OPENGD77_STRUCT_SIZE                   176 // 80 channels per zone
 #define ZONE_DATA_STRUCT_SIZE                                     184
+// (NOTE: **DO NOT REMOVE THE UNSIGNED SUFFIX** of the following two constants
+#define CODEPLUG_ZONES_MAX                                         68U // Max number of zones
+#define CODEPLUG_ALL_ZONES_MAX                                     (1U + CODEPLUG_ZONES_MAX) // All channels + every zones
 
 // Channel
 #define CODEPLUG_CHANNEL_DATA_STRUCT_SIZE                          56
@@ -61,8 +79,16 @@ extern const int VFO_FREQ_STEP_TABLE[8];
 #define CODEPLUG_SIGNALLING_DTMF_DATA_STRUCT_SIZE                 120
 #define SIGNALLING_DTMF_DURATIONS_DATA_STRUCT_SIZE                  5
 
+// Last Used Channel in Zone
+#define CODEPLUG_ADDR_LUCZ                                     0x6000
+
+
 #define CODEPLUG_CONTACTS_MIN                                       1
 #define CODEPLUG_CONTACTS_MAX                                    1024
+
+#define CODEPLUG_CONTACT_FLAG_NO_TS_OVERRIDE                      0x01
+#define CODEPLUG_CONTACT_FLAG_TS_OVERRIDE_TIMESLOT_MASK           0x02
+#define CODEPLUG_CONTACT_FLAG_TS_OVERRIDE_MASK                    0x03
 
 #define CODEPLUG_RX_GROUPLIST_MAX                                  76
 
@@ -72,21 +98,86 @@ extern const int VFO_FREQ_STEP_TABLE[8];
 #define CODEPLUG_CHANNELS_PER_BANK                                128
 
 #define CODEPLUG_DTMF_CONTACTS_MIN                                  1
-#define CODEPLUG_DTMF_CONTACTS_MAX                                 32
+#define CODEPLUG_DTMF_CONTACTS_MAX                                 63
 
-#define CODEPLUG_CSS_NONE                                      0xFFFF
-#define CODEPLUG_DCS_FLAGS_MASK                                0xC000
-#define CODEPLUG_DCS_INVERTED_MASK                             0x4000
+#define CODEPLUG_CSS_TONE_NONE                                 0xFFFF
+typedef enum
+{
+	CSS_TYPE_NONE          = (1 << 0),
+	CSS_TYPE_CTCSS         = (1 << 1),
+	CSS_TYPE_DCS           = (1 << 15),
+	CSS_TYPE_DCS_INVERTED  = (1 << 14),
+	CSS_TYPE_DCS_MASK      = (CSS_TYPE_DCS | CSS_TYPE_DCS_INVERTED)
+} CodeplugCSSTypes_t;
 
+typedef enum
+{
+	// LibreDMR_flag1
+	CHANNEL_FLAG_OPTIONAL_DMRID = 0,
+	CHANNEL_FLAG_NO_BEEP,
+	CHANNEL_FLAG_NO_ECO,
+	CHANNEL_FLAG_OUT_OF_BAND, // MD-9600 Only
+	CHANNEL_FLAG_USE_LOCATION,
+	CHANNEL_FLAG_FORCE_DMO,
+	CHANNEL_FLAG_ROAMING,
+	// flag2
+	CHANNEL_FLAG_TIMESLOT_TWO,
+	// flag3
+	CHANNEL_FLAG_STE,
+	CHANNEL_FLAG_NON_STE,
+	// flag4
+	CHANNEL_FLAG_POWER,
+	CHANNEL_FLAG_VOX,
+	CHANNEL_FLAG_ZONE_SKIP,
+	CHANNEL_FLAG_ALL_SKIP,
+	CHANNEL_FLAG_RX_ONLY,
+	CHANNEL_FLAG_BW_25K,
+	CHANNEL_FLAG_SQUELCH,
+} ChannelFlag_t;
 
-#define CODEPLUG_CHANNEL_FLAG_ALL_SKIP                           0x10
-#define CODEPLUG_CHANNEL_FLAG_ZONE_SKIP                          0x20
-#define CODEPLUG_CHANNEL_IS_FLAG_SET(c, f)                      ((((c)->flag4 & (f)) != 0x0))
+// LibreDMR_flag1
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_OPTIONAL_DMRID           0x80
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_NO_BEEP                  0x40
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_NO_ECO                   0x20
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_OUT_OF_BAND              0x10 // MD-9600 Only
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_USE_LOCATION             0x08
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_FORCE_DMO                0x04
+#define CODEPLUG_CHANNEL_LIBREDMR_FLAG1_ROAMING                  0x01
+// flag2
+#define CODEPLUG_CHANNEL_FLAG2_TIMESLOT_TWO                      0x40
+// flag3
+#define CODEPLUG_CHANNEL_FLAG3_STE                               0xC0
+#define CODEPLUG_CHANNEL_FLAG3_NON_STE                           0x20
+// flag4
+#define CODEPLUG_CHANNEL_FLAG4_SQUELCH                           0x01
+#define CODEPLUG_CHANNEL_FLAG4_BW_25K                            0x02
+#define CODEPLUG_CHANNEL_FLAG4_RX_ONLY                           0x04
+#define CODEPLUG_CHANNEL_FLAG4_ALL_SKIP                          0x10
+#define CODEPLUG_CHANNEL_FLAG4_ZONE_SKIP                         0x20
+#define CODEPLUG_CHANNEL_FLAG4_VOX                               0x40
+#define CODEPLUG_CHANNEL_FLAG4_POWER                             0x80
+
+#define CODEPLUG_APRS_CONFIG_FLAG_NONE                           0x00
+#define CODEPLUG_APRS_CONFIG_FLAG_300_BAUDS                      0x01
+#define CODEPLUG_APRS_CONFIG_FLAG_USE_POSITION                   0x02
+#define CODEPLUG_APRS_CONFIG_FLAG_TRANSMIT_QSY_INFO              0x04
+#define CODEPLUG_APRS_CONFIG_FLAG_BEACONING_SILENTLY             0x08
+#define CODEPLUG_APRS_CONFIG_FLAG_AMBIGUITY_MASK                 0xE0
 
 extern int codeplugChannelsPerZone;
 
+#if defined(PLATFORM_MD9600) || defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+#define FLASH_ADDRESS_OFFSET  (128 * 1024)
+#else
+#define FLASH_ADDRESS_OFFSET  (0)
+#endif
 
-enum CONTACT_CALLTYPE_SELECT { CONTACT_CALLTYPE_TG = 0, CONTACT_CALLTYPE_PC, CONTACT_CALLTYPE_ALL };
+typedef enum
+{
+	CONTACT_CALLTYPE_TG = 0,
+	CONTACT_CALLTYPE_PC,
+	CONTACT_CALLTYPE_ALL
+} ContactCalltype_t;
 
 typedef enum
 {
@@ -105,8 +196,8 @@ typedef struct
 	uint16_t	channels[80];// 16 for the original codeplug, but set this to  80 to allow for the new codeplug zones format
 	int			NOT_IN_CODEPLUGDATA_numChannelsInZone;// This property is not part of the codeplug data, its initialised by the code
 	int			NOT_IN_CODEPLUGDATA_highestIndex; // Highest index in the array of channels
-	int			NOT_IN_CODEPLUGDATA_indexNumber;// This property is not part of the codeplug data, its initialised by the code. Index > 0 are real zone. -1 indicates the virtual "All channels" zone
-} struct_codeplugZone_t;
+	int			NOT_IN_CODEPLUGDATA_indexNumber;// This property is not part of the codeplug data, its initialised by the code. Index >= 0 are real zone. -1 indicates the virtual "All channels" zone
+} CodeplugZone_t;
 
 typedef struct
 {
@@ -115,34 +206,43 @@ typedef struct
 	uint32_t txFreq;
 	uint8_t chMode;
 	uint8_t libreDMR_Power;
-	uint8_t txRefFreq;
+	uint8_t locationLat0;// Latitude LS byte
 	uint8_t tot;
-	uint8_t totRekey;
-	uint8_t admitCriteria;
-	uint8_t rssiThreshold;
-	uint8_t scanList;
+	uint8_t locationLat1;// Latitude
+	uint8_t locationLat2;// Latitude MS byte
+	uint8_t locationLon0;// Longitude LS byte
+	uint8_t locationLon1;
 	uint16_t rxTone;
 	uint16_t txTone;
-	uint8_t voiceEmphasis;
-	uint8_t txSignaling;
-	uint8_t unmuteRule;
-	uint8_t rxSignaling;
-	uint8_t artsInterval;
-	uint8_t encrypt;
-	uint8_t rxColor;
-	uint8_t rxGroupList;
+	uint8_t locationLon2;// Latitude MS byte
+	uint8_t _UNUSED_1;
+	uint8_t LibreDMR_flag1; // was unmuteRule. 0x80: Optional DMRID sets, 0x40: no beep, 0x20: no Eco, 0x10: OutOfBand(MD9600 only, never saved in codeplug)
+	uint8_t rxSignaling;    // +--
+	uint8_t artsInterval;   // | These 3 bytes were repurposed for optional DMRID
+	uint8_t encrypt;        // +--
+	uint8_t _UNUSED_2;
+	uint8_t rxGroupList; // a.k.a TG List
 	uint8_t txColor;
-	uint8_t emgSystem;
+	uint8_t aprsConfigIndex;
 	uint16_t contact;
-	uint8_t flag1;
-	uint8_t flag2;
-	uint8_t flag3;// bits... 0x20 = DisableAllLeds
-	uint8_t flag4;// bits... 0x80 = Power, 0x40 = Vox, 0x20 = ZoneSkip (AutoScan), 0x10 = AllSkip (LoneWoker), 0x08 = AllowTalkaround, 0x04 = OnlyRx, 0x02 = Channel width, 0x01 = Squelch
-	uint16_t VFOoffsetFreq;
+	uint8_t flag1;// lower 4 bits TA Tx control
+	uint8_t flag2; // bits... 0x40 = TS
+	uint8_t flag3;// bits... 0x20 = NonSTE, 0xC0 = STE
+	uint8_t flag4;// bits... 0x80 = Power, 0x40 = Vox, 0x20 = ZoneSkip (AutoScan), 0x10 = AllSkip (LoneWoker), 0x08 = AllowTalkaround(UNUSED), 0x04 = OnlyRx, 0x02 = Channel width, 0x01 = Squelch
+	uint16_t VFOoffsetFreq;// NOT USED ?
 	uint8_t VFOflag5;// upper 4 bits are the step frequency 2.5,5,6.25,10,12.5,25,30,50kHz
 	uint8_t sql;// Does not seem to be used in the official firmware and seems to be always set to 0
 	uint8_t NOT_IN_CODEPLUG_flag; // bit 0x01 = vfo channel
-} struct_codeplugChannel_t;
+	int	NOT_IN_CODEPLUG_CALCULATED_DISTANCE_X10;// -1 = no distance available
+} CodeplugChannel_t;
+
+typedef enum
+{
+	TA_TX_OFF = 0,
+	TA_TX_APRS,
+	TA_TX_TEXT,
+	TA_TX_BOTH
+} CodeplugTATxDestination_t;
 
 typedef struct
 {
@@ -150,7 +250,7 @@ typedef struct
 	uint16_t contacts[32];
 	int	NOT_IN_CODEPLUG_numTGsInGroup;// NOT IN THE
 	uint32_t NOT_IN_CODEPLUG_contactsTG[32];
-} struct_codeplugRxGroup_t;
+} CodeplugRxGroup_t;
 
 typedef struct
 {
@@ -161,13 +261,13 @@ typedef struct
 	uint8_t		ringStyle;
 	uint8_t		reserve1; // TS override: bit0 1 = no TS override, bit1 + 1: timeslot override value
 	int         NOT_IN_CODEPLUGDATA_indexNumber;
-} struct_codeplugContact_t;
+} CodeplugContact_t;
 
 typedef struct
 {
 	char       name[16];
 	uint8_t    code[16];
-} struct_codeplugDTMFContact_t;
+} CodeplugDTMFContact_t;
 
 typedef struct
 {
@@ -191,7 +291,7 @@ typedef struct
 	uint8_t		flag4;
 	uint8_t		reserver2[2];
 	char 		prgPwd[8];
-} struct_codeplugGeneralSettings_t;
+} CodeplugGeneralSettings_t;
 
 typedef struct
 {
@@ -216,8 +316,7 @@ typedef struct
 	 uint8_t	rate;
 	 uint8_t	flag2;
 	 uint8_t	reserve4;
-} struct_codeplugSignalling_DTMF_t;
-
+} CodeplugSignallingDTMF_t;
 
 typedef struct
 {
@@ -226,7 +325,7 @@ typedef struct
 	uint8_t 	otherDur;		// * and # Duration (unit: hundreds of ms)
 	uint8_t 	rate;			// DTMF Rate: 1 .. 10 digits / second
 	uint8_t		libreDMR_Tail;	// TX Tail duration (unit: hundreds of ms)
-} struct_codeplugSignalling_DTMFDurations_t;
+} CodeplugSignallingDTMFDurations_t;
 
 typedef struct
 {
@@ -243,15 +342,43 @@ typedef struct
 	uint8_t		firmwareVer[8];
 	uint8_t		dspFwVer[24];
 	uint8_t		reserve3[8];
-} struct_codeplugDeviceInfo_t;
+} CodeplugDeviceInfo_t;
 
 
 typedef enum
 {
-	CODEPLUG_CUSTOM_DATA_TYPE_NONE = 0,
-	CODEPLUG_CUSTOM_DATA_TYPE_IMAGE,
-	CODEPLUG_CUSTOM_DATA_TYPE_BEEP
-} codeplugCustomDataType_t;
+	CODEPLUG_CUSTOM_DATA_TYPE_EMPTY = 0xFFFFFFFF,
+	CODEPLUG_CUSTOM_DATA_TYPE_IMAGE = 1,
+	CODEPLUG_CUSTOM_DATA_TYPE_BEEP,
+	CODEPLUG_CUSTOM_DATA_TYPE_SATELLITE_TLE,
+	CODEPLUG_CUSTOM_DATA_TYPE_THEME_DAY,
+	CODEPLUG_CUSTOM_DATA_TYPE_THEME_NIGHT,
+} CodeplugCustomDataType_t;
+
+
+typedef struct
+{
+	char 		name[6];
+	uint8_t		SSID;
+} APRS_Paths_t;
+
+// We need to use packed attribute here, as the structure is messy
+// and introduces some padding...
+typedef struct __attribute__((packed))
+{
+	char 			name[8];
+	uint8_t 		senderSSID;
+	char			latitude[3];
+	char			longitude[3];
+	APRS_Paths_t	paths[2];
+	uint8_t			iconTable;
+	uint8_t			iconIndex;
+	char 			comment[24];
+	uint32_t		txFrequency;
+	uint8_t			reserved[2];
+	uint8_t			flags;
+	uint16_t		magicVer;
+} CodeplugAPRSConfig_t;
 
 /*
  * deprecated. Use our own non volatile storage instead
@@ -259,62 +386,83 @@ typedef enum
 void codeplugZoneGetSelected(int *selectedZone,int *selectedChannel);
 void codeplugZoneSetSelected(int selectedZone,int selectedChannel);
  */
+void codeplugZonesInitCache(void);
 int codeplugZonesGetCount(void);
-bool codeplugZoneGetDataForNumber(int indexNum,struct_codeplugZone_t *returnBuf);
-void codeplugChannelGetDataWithOffsetAndLengthForIndex(int index, struct_codeplugChannel_t *channelBuf, uint8_t offset, int length);
-void codeplugChannelGetDataForIndex(int index, struct_codeplugChannel_t *channelBuf);
-void codeplugUtilConvertBufToString(char *codeplugBuf,char *outBuf,int len);
-void codeplugUtilConvertStringToBuf(char *inBuf,char *outBuf,int len);
-uint32_t byteSwap32(uint32_t n);
+bool codeplugZoneGetDataForNumber(int indexNum, CodeplugZone_t *returnBuf);
+uint32_t codeplugChannelGetOptionalDMRID(CodeplugChannel_t *channelBuf);
+void codeplugChannelSetOptionalDMRID(CodeplugChannel_t *channelBuf, uint32_t dmrID);
+uint8_t codeplugChannelGetFlag(CodeplugChannel_t *channelBuf, ChannelFlag_t flag);
+uint8_t codeplugChannelSetFlag(CodeplugChannel_t *channelBuf, ChannelFlag_t flag, uint8_t value);
+void codeplugChannelGetDataWithOffsetAndLengthForIndex(int index, CodeplugChannel_t *channelBuf, uint8_t offset, int length);
+void codeplugChannelGetDataForIndex(int index, CodeplugChannel_t *channelBuf);
+void codeplugUtilConvertBufToString(char *codeplugBuf, char *outBuf, int len);
+void codeplugUtilConvertStringToBuf(char *inBuf, char *outBuf, int len);
 uint32_t bcd2int(uint32_t i);
-int int2bcd(int i);
-uint16_t bco2int(uint16_t i);
-uint16_t int2bco(uint16_t i);
+uint32_t int2bcd(uint32_t i);
 uint16_t codeplugCSSToInt(uint16_t css);
 uint16_t codeplugIntToCSS(uint16_t i);
 
-bool codeplugRxGroupGetDataForIndex(int index, struct_codeplugRxGroup_t *rxGroupBuf);
+bool codeplugRxGroupGetDataForIndex(int index, CodeplugRxGroup_t *rxGroupBuf);
 
-bool codeplugContactGetDataForIndex(int index, struct_codeplugContact_t *contact);
-bool codeplugDTMFContactGetDataForIndex(int index, struct_codeplugDTMFContact_t *contact);
+bool codeplugContactGetDataForIndex(int index, CodeplugContact_t *contact);
+bool codeplugDTMFContactGetDataForIndex(int index, CodeplugDTMFContact_t *contact);
 
-int codeplugGetUserDMRID(void);
+uint32_t codeplugGetUserDMRID(void);
 void codeplugSetUserDMRID(uint32_t dmrId);
 void codeplugGetRadioName(char *buf);
 void codeplugGetBootScreenData(char *line1, char *line2, uint8_t *displayType);
-void codeplugGetVFO_ChannelData(struct_codeplugChannel_t *vfoBuf, Channel_t VFONumber);
-void codeplugSetVFO_ChannelData(struct_codeplugChannel_t *vfoBuf, Channel_t VFONumber);
+void codeplugGetVFO_ChannelData(CodeplugChannel_t *vfoBuf, Channel_t VFONumber);
+void codeplugSetVFO_ChannelData(CodeplugChannel_t *vfoBuf, Channel_t VFONumber);
 bool codeplugAllChannelsIndexIsInUse(int index);
 void codeplugAllChannelsIndexSetUsed(int index);
-bool codeplugChannelSaveDataForIndex(int index, struct_codeplugChannel_t *channelBuf);
-bool codeplugChannelToneIsCTCSS(uint16_t tone);
-bool codeplugChannelToneIsDCS(uint16_t tone);
+bool codeplugChannelSaveDataForIndex(int index, CodeplugChannel_t *channelBuf);
+CodeplugCSSTypes_t codeplugGetCSSType(uint16_t tone);
+void codeplugConvertChannelInternalToCodeplug(CodeplugChannel_t *codeplugChannel, CodeplugChannel_t *internalChannel);
+
 
 int codeplugDTMFContactsGetCount(void);
-int codeplugContactsGetCount(int callType);
-int codeplugContactGetDataForNumberInType(int number, int callType, struct_codeplugContact_t *contact);
-int codeplugContactGetDataForNumber(int number, int callType, struct_codeplugContact_t *contact);
-int codeplugDTMFContactGetDataForNumber(int number, struct_codeplugDTMFContact_t *contact);
-int codeplugContactIndexByTGorPC(int tgorpc, int callType, struct_codeplugContact_t *contact, uint8_t optionalTS);
-int codeplugContactSaveDataForIndex(int index, struct_codeplugContact_t *contact);
+int codeplugContactsGetCount(uint32_t callType);
+int codeplugContactGetDataForNumberInType(int number, uint32_t callType, CodeplugContact_t *contact);
+int codeplugDTMFContactGetDataForNumber(int number, CodeplugDTMFContact_t *contact);
+int codeplugContactIndexByTGorPCFromNumber(int number, uint32_t tgorpc, ContactCalltype_t callType, CodeplugContact_t *contact, uint8_t optionalTS);
+int codeplugContactIndexByTGorPC(uint32_t tgorpc, ContactCalltype_t callType, CodeplugContact_t *contact, uint8_t optionalTS);
+int codeplugContactSaveDataForIndex(int index, CodeplugContact_t *contact);
+uint32_t codeplugContactGetPackedId(CodeplugContact_t *contact);
 int codeplugContactGetFreeIndex(void);
 bool codeplugContactGetRXGroup(int index);
 void codeplugInitChannelsPerZone(void);
-bool codeplugGetOpenGD77CustomData(codeplugCustomDataType_t dataType,uint8_t *dataBuf);
+bool codeplugGetOpenGD77CustomData(CodeplugCustomDataType_t dataType, uint8_t *dataBuf);
+bool codeplugSetOpenGD77CustomData(CodeplugCustomDataType_t dataType, uint8_t *dataBuf, int len);
 
 void codeplugAllChannelsInitCache(void);
 void codeplugInitCaches(void);
 
 bool codeplugContactsContainsPC(uint32_t pc);
-bool codeplugGetGeneralSettings(struct_codeplugGeneralSettings_t *generalSettingsBuffer);
-bool codeplugGetSignallingDTMF(struct_codeplugSignalling_DTMF_t *signallingDTMFBuffer);
-bool codeplugGetSignallingDTMFDurations(struct_codeplugSignalling_DTMFDurations_t *signallingDTMFDurationsBuffer);
-bool codeplugZoneAddChannelToZoneAndSave(int channelIndex, struct_codeplugZone_t *zoneBuf);
-bool codeplugGetDeviceInfo(struct_codeplugDeviceInfo_t *deviceInfoBuffer);
+bool codeplugGetGeneralSettings(CodeplugGeneralSettings_t *generalSettingsBuffer);
+bool codeplugGetSignallingDTMF(CodeplugSignallingDTMF_t *signallingDTMFBuffer);
+bool codeplugGetSignallingDTMFDurations(CodeplugSignallingDTMFDurations_t *signallingDTMFDurationsBuffer);
+bool codeplugZoneAddChannelToZoneAndSave(int channelIndex, CodeplugZone_t *zoneBuf);
+bool codeplugGetDeviceInfo(CodeplugDeviceInfo_t *deviceInfoBuffer);
 
 uint16_t codeplugGetQuickkeyFunctionID(char key);
 bool codeplugSetQuickkeyFunctionID(char key, uint16_t functionId);
 
 int codeplugGetRepeaterWakeAttempts(void);
 int codeplugGetPasswordPin(int32_t *pinCode);
+
+void codeplugSetTATxForTS(CodeplugChannel_t *channelBuf, uint8_t ts, CodeplugTATxDestination_t taTx);
+CodeplugTATxDestination_t codeplugGetTATxForTS(CodeplugChannel_t *channelBuf, uint8_t ts);
+
+void codeplugInitLastUsedChannelInZone(void);
+int16_t codeplugGetLastUsedChannelInZone(int zoneNum);
+int16_t codeplugGetLastUsedChannelInCurrentZone(void);
+int16_t codeplugGetLastUsedChannelNumberInCurrentZone(void);
+int16_t codeplugSetLastUsedChannelInZone(int zoneNum, int16_t channelNum);
+int16_t codeplugSetLastUsedChannelInCurrentZone(int16_t channelNum);
+bool codeplugSaveLastUsedChannelInZone(void);
+
+int codeplugAPRSConfigGetCount(void);
+bool codeplugAPRSGetDataForIndex(int index, CodeplugAPRSConfig_t *APRS_Buf);
+int codeplugAPRSGetIndexOfName(char *configName);
+
 #endif

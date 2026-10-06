@@ -1,19 +1,30 @@
 /*
- * Copyright (C)2019 Kai Ludwig, DG4KLU
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2020-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 
 #ifndef _OPENGD77_HR_C6000_H_
@@ -28,18 +39,26 @@
 #include "usb/usb_com.h"
 
 #include "dmr_codec/codec.h"
+#include "interfaces/wdog.h"
+
+#include "functions/ticks.h"
+
+extern Task_t hrc6000Task;
+
+#define DMR_FRAME_BUFFER_SIZE     64
+
+#define AMBE_AUDIO_LENGTH         27
+#define LC_DATA_LENGTH            12
 
 
-#define DMR_FRAME_BUFFER_SIZE 64
+#define TG_CALL_FLAG            0x00
+#define PC_CALL_FLAG            0x03
 
-extern const uint8_t TG_CALL_FLAG;
-extern const uint8_t PC_CALL_FLAG;
-extern volatile int slot_state;
+extern volatile int slotState;
 extern volatile uint8_t DMR_frame_buffer[DMR_FRAME_BUFFER_SIZE];
 extern volatile bool updateLastHeard;
 extern volatile int dmrMonitorCapturedTS;
-extern char talkAliasText[33];
-extern volatile uint32_t readDMRRSSI;
+extern volatile ticksTimer_t readDMRRSSITimer;
 
 enum DMR_SLOT_STATE { DMR_STATE_IDLE, DMR_STATE_RX_1, DMR_STATE_RX_2, DMR_STATE_RX_END,
 					  DMR_STATE_TX_START_1, DMR_STATE_TX_START_2, DMR_STATE_TX_START_3, DMR_STATE_TX_START_4, DMR_STATE_TX_START_5,
@@ -47,29 +66,47 @@ enum DMR_SLOT_STATE { DMR_STATE_IDLE, DMR_STATE_RX_1, DMR_STATE_RX_2, DMR_STATE_
 					  DMR_STATE_REPEATER_WAKE_1, DMR_STATE_REPEATER_WAKE_2, DMR_STATE_REPEATER_WAKE_3,
 					  DMR_STATE_REPEATER_WAKE_FAIL_1, DMR_STATE_REPEATER_WAKE_FAIL_2 };
 
-enum WakingMode { WAKING_MODE_NONE, WAKING_MODE_WAITING, WAKING_MODE_FAILED };
+enum WakingMode { WAKING_MODE_NONE, WAKING_MODE_WAITING, WAKING_MODE_AWAKEN, WAKING_MODE_FAILED };
 
-void HRC6000_init(void);
+enum DMR_Embedded_Data
+{
+	DMR_EMBEDDED_DATA_GROUP               = 0U,
+	DMR_EMBEDDED_DATA_USER_USER           = 3U,
+	DMR_EMBEDDED_DATA_TALKER_ALIAS_HEADER = 4U,
+	DMR_EMBEDDED_DATA_TALKER_ALIAS_BLOCK1 = 5U,
+	DMR_EMBEDDED_DATA_TALKER_ALIAS_BLOCK2 = 6U,
+	DMR_EMBEDDED_DATA_TALKER_ALIAS_BLOCK3 = 7U,
+	DMR_EMBEDDED_DATA_GPS_INFO            = 8U
+};
+
 void PORTC_IRQHandler(void);
-void init_HR_C6000_interrupts(void);
-void init_digital_state(void);
-void init_digital_DMR_RX(void);
-void reset_timeslot_detection(void);
-void init_digital(void);
-void terminate_digital(void);
-void init_hrc6000_task(void);
-void fw_hrc6000_task(void *data);
-void tick_HR_C6000(void);
 
-void clearIsWakingState(void);
-int getIsWakingState(void);
-void clearActiveDMRID(void);
-void setMicGainDMR(uint8_t gain);
-bool checkTalkGroupFilter(void);
 
-int HRC6000GetReceivedTgOrPcId(void);
-int HRC6000GetReceivedSrcId(void);
+void HRC6000Init(void);
+void HRC6000InitInterrupts(void);
+void HRC6000InitDigitalDmrRx(void);
+void HRC6000ResetTimeSlotDetection(void);
+void HRC6000InitDigital(void);
+void HRC6000TerminateDigital(void);
+void HRC6000InitTask(void);
+void HRC6000ResyncTimeSlot(void);
+uint32_t HRC6000GetReceivedTgOrPcId(void);
+uint32_t HRC6000GetReceivedSrcId(void);
 void HRC6000ClearTimecodeSynchronisation(void);
-void HRC6000SetCCFilterMode(bool enable);
+void HRC6000ClearColorCodeSynchronisation(void);
+void HRC6000SetTalkerAlias(const char *text);
+void HRC6000SetTalkerAliasLocation(uint32_t Lat, uint32_t Lon);
+bool HRC6000IRQHandlerIsRunning(void);
+bool HRC6000HasGotSync(void);
+bool HRC6000CCIsHeld(void);
+void HRC6000SetDmrRxGain(int8_t gain);
+
+
+void HRC6000ClearIsWakingState(void);
+int HRC6000GetIsWakingState(void);
+void HRC6000ClearActiveDMRID(void);
+bool HRC6000CheckTalkGroupFilter(void);
+
+void HRC6000SetMicGainDMR(uint8_t gain);
 
 #endif /* _OPENGD77_HR_C6000_H_ */

@@ -1,19 +1,29 @@
 /*
- * Copyright (C)2019 Roger Clark. VK3KYY / G4KYF
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 #ifndef _OPENGD77_MENUSYSTEM_H_
 #define _OPENGD77_MENUSYSTEM_H_
@@ -25,7 +35,21 @@
 #include "functions/voicePrompts.h"
 
 
+#if defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+#if defined(PLATFORM_VARIANT_DM1701)
+#define MENU_MAX_DISPLAYED_ENTRIES 6
+#else
+#define MENU_MAX_DISPLAYED_ENTRIES 7
+#endif
+#else
+// Black and white smaller height screeens (MD9600 and GD77 etc)
 #define MENU_MAX_DISPLAYED_ENTRIES 3
+#endif
+
+// These macros are taking care of the odd/even value of MENU_MAX_DISPLAYED_ENTRIES (-x..0..+x)
+#define MENU_START_ITERATION_VALUE ((MENU_MAX_DISPLAYED_ENTRIES & 0x01) ? (1 - ((MENU_MAX_DISPLAYED_ENTRIES - 1) / 2) - 1) : (1 - (MENU_MAX_DISPLAYED_ENTRIES / 2)))
+#define MENU_END_ITERATION_VALUE ((MENU_MAX_DISPLAYED_ENTRIES & 0x01) ? (MENU_MAX_DISPLAYED_ENTRIES - ((MENU_MAX_DISPLAYED_ENTRIES - 1) / 2) - 1) : (MENU_MAX_DISPLAYED_ENTRIES - (MENU_MAX_DISPLAYED_ENTRIES / 2)))
+
 
 // Short press event
 #define BUTTONCHECK_SHORTUP(e, sk) (((e)->keys.key == 0) && ((e)->buttons & sk ## _SHORT_UP))
@@ -35,14 +59,18 @@
 #define BUTTONCHECK_EXTRALONGDOWN(e, sk) (((e)->keys.key == 0) && ((e)->buttons & sk ## _EXTRA_LONG_DOWN))
 // SK*/ORANGE button is down, regardless event status
 #define BUTTONCHECK_DOWN(e, sk) (((e)->buttons & sk))
+// SK*/ORANGE button is the only one down, regardless event status.
+#define BUTTONCHECK_UNIQUE_DOWN(e, sk) (((e)->buttons & sk) && (((e)->buttons & ~(sk | sk ## _SHORT_UP | sk ## _LONG_DOWN | sk ## _EXTRA_LONG_DOWN)) == 0))
+
 
 typedef enum
 {
-	NO_EVENT       = 0,
-	KEY_EVENT      = (1 << 0),
-	BUTTON_EVENT   = (1 << 1),
-	FUNCTION_EVENT = (1 << 2),
-	ROTARY_EVENT   = (1 << 3)
+	NO_EVENT        = 0,
+	KEY_EVENT       = (1 << 0),
+	BUTTON_EVENT    = (1 << 1),
+	FUNCTION_EVENT  = (1 << 2),
+	ROTARY_EVENT    = (1 << 3),
+	SYNTHETIC_EVENT = (1 << 7)
 } uiEventInput_t;
 
 typedef enum
@@ -66,6 +94,41 @@ typedef enum
 	MENU_STATUS_FORCE_FIRST = (1 << 3)
 } menuStatus_t;
 
+
+typedef enum
+{
+	NOTIFICATION_TYPE_SQUELCH = 0,
+	NOTIFICATION_TYPE_POWER,
+#if defined(HAS_SOFT_VOLUME)
+	NOTIFICATION_TYPE_VOLUME,
+#endif
+	NOTIFICATION_TYPE_MESSAGE,
+	NOTIFICATION_TYPE_BEARING,
+	NOTIFICATION_TYPE_MAX
+} uiNotificationType_t;
+
+typedef enum
+{
+	NOTIFICATION_ID_NONE = 0,
+	NOTIFICATION_ID_SQUELCH,
+#if defined(HAS_SOFT_VOLUME)
+	NOTIFICATION_ID_VOLUME,
+#endif
+	NOTIFICATION_ID_POWER,
+	NOTIFICATION_ID_MESSAGE,
+	NOTIFICATION_ID_BEARING,
+	NOTIFICATION_ID_TX_INHIBIT,
+	NOTIFICATION_ID_USER /* Could use _USER, _USER + 1, + 2, etc... */
+} uiNotificationID_t;
+
+typedef struct
+{
+	double bearing;
+	int32_t distanceX10;
+} uiNotificationBearingInfo_t;
+
+#define NOTIFICATION_ID_USER_APO (NOTIFICATION_ID_USER)
+
 typedef struct
 {
 	uint32_t        		buttons;
@@ -77,11 +140,13 @@ typedef struct
 	uint32_t        		time;
 } uiEvent_t;
 
-
 typedef menuStatus_t (*menuFunctionPointer_t)(uiEvent_t *, bool); // Typedef for menu function pointers.  Functions are passed the key, the button and the event data. Event can be a Key or a button or both. Last arg is for when the function is only called to initialise and display its screen.
+typedef void (*menuExitCallback_t)(void *data);
 typedef struct
 {
 	const menuFunctionPointer_t	function;
+	menuExitCallback_t			exitCallback;
+	void					   *data;
 	int							lastItemIndex;
 } menuFunctionData_t;
 
@@ -106,32 +171,48 @@ typedef struct
 
 
 void menuDisplayTitle(const char *title);
-void menuDisplayEntry(int loopOffset, int focusedItem,const char *entryText);
+void menuDisplayEntry(int loopOffset, int focusedItem, const char *entryText, int32_t optStart, themeItem_t fgItem, themeItem_t fgOptItem, themeItem_t bgItem);
 
-int menuGetMenuOffset(int maxMenuEntries, int loopOffset);
+// menuGetMenuOffset() return values
+#define MENU_OFFSET_BEFORE_FIRST_ENTRY -1
+#define MENU_OFFSET_AFTER_LAST_ENTRY   -2
+int menuGetMenuOffset(int maxMenuItems, int loopOffset);
 
 void uiChannelModeUpdateScreen(int txTimeSecs);
+void uiChannelModeLoadChannelData(bool useChannelDataInMemory, bool loadVoicePromptAnnouncement);
 void uiChannelModeColdStart(void);
+
 void uiVFOModeUpdateScreen(int txTimeSecs);
-void uiVFOLoadContact(struct_codeplugContact_t *contact);
+void uiVFOModeLoadChannelData(bool forceAPRSReset);
+
+void uiVFOLoadContact(CodeplugContact_t *contact);
+bool uiVFOModeIsTXFocused(void);
 void uiVFOModeStopScanning(void);
 bool uiVFOModeIsScanning(void);
 bool uiVFOModeDualWatchIsScanning(void);
+bool uiVFOModeSweepScanning(bool includePaused);
+void uiVFOSweepScanModePause(bool pause, bool forceDigitalOnPause);
+bool uiVFOModeFrequencyScanningIsActiveAndEnabled(uint32_t *lowFreq, uint32_t *highFreq);
 void uiChannelModeStopScanning(void);
 bool uiChannelModeIsScanning(void);
+void uiChannelInitializeCurrentZone(void);
+
 
 void uiCPSUpdate(uiCPSCommand_t command, int x, int y, ucFont_t fontSize, ucTextAlign_t alignment, bool isInverted, char *szMsg);
 
-void menuSystemInit(void);
+void menuSystemInit(time_t_custom UTCdateTimeInSecs);
 void menuSystemLanguageHasChanged(void);
 void displayLightTrigger(bool fromKeyEvent);
 void displayLightOverrideTimeout(int timeout);
+int menuSystemGetLastItemIndex(int stackPos);
+void menuSystemCallExitCallback(void);
+void menuSystemRegisterExitCallback(menuExitCallback_t f, void *data);
 void menuSystemPushNewMenu(int menuNumber);
 
 void menuSystemSetCurrentMenu(int menuNumber);
 int menuSystemGetCurrentMenuNumber(void);
 int menuSystemGetPreviousMenuNumber(void);
-int menuSystemGetPreviouslyPushedMenuNumber(void);
+int menuSystemGetPreviouslyPushedMenuNumber(bool keepIt);
 
 int menuSystemGetRootMenuNumber(void);
 
@@ -160,7 +241,12 @@ void menuPrivateCallDismiss(void);
 void menuHotspotRestoreSettings(void);
 
 bool menuTxScreenDisplaysLastHeard(void);
+void menuTxScreenHandleTxTermination(uiEvent_t *ev, txTerminationReason_t reason);
 
+void menuSatelliteScreenClearPredictions(bool reloadKeps);
+bool menuSatelliteIsDisplayingHeader(void);
+void menuSatelliteTxScreen(uint32_t txTimeSecs);
+void menuSatelliteSetFullReload(void);
 void menuSystemMenuIncrement(int32_t *O, int32_t M);
 void menuSystemMenuDecrement(int32_t *O, int32_t M);
 
@@ -173,6 +259,19 @@ bool uiChannelModeTransmitDTMFContactForGD77S(void);
 void uiChannelModeHeartBeatActivityForGD77S(uiEvent_t *ev);
 #endif
 
+
+void uiNotificationShow(uiNotificationType_t type, uiNotificationID_t id, uint32_t msTimeout, const char *message, bool immediateRender);
+void uiNotificationBearingShow(uiNotificationBearingInfo_t *bearing, uint32_t msTimeout, bool immediateRender);
+void uiNotificationRefresh(void);
+bool uiNotificationHasTimedOut(void);
+bool uiNotificationIsVisible(void);
+void uiNotificationHide(bool immediateRender);
+uiNotificationID_t uiNotificationGetId(void);
+
+
+#if defined(HAS_GPS)
+extern const uint8_t MENU_GENERAL_OPTIONS_GPS_ENTRY_NUMBER;
+#endif
 
 //
 //  ---- Menu internals ----
@@ -188,39 +287,95 @@ void uiChannelModeHeartBeatActivityForGD77S(uiEvent_t *ev);
 enum MENU_SCREENS
 {
 	MENU_EMPTY = -1,
-	UI_SPLASH_SCREEN = 0,
-	UI_POWER_OFF,
-	UI_VFO_MODE,
-	UI_CHANNEL_MODE,
-	MENU_MAIN_MENU,
+	MENU_ANY = MENU_EMPTY,
+	MENU_MAIN_MENU = 0,
 	MENU_CONTACTS_MENU,
 	MENU_ZONE_LIST,
 	MENU_RADIO_INFOS,
-	MENU_FIRMWARE_INFO,
-	MENU_NUMERICAL_ENTRY,
-	UI_TX_SCREEN,
 	MENU_RSSI_SCREEN,
 	MENU_LAST_HEARD,
-	MENU_OPTIONS,
-	MENU_DISPLAY,
-	MENU_SOUND,
-	MENU_CREDITS,
-	MENU_CHANNEL_DETAILS,
-	UI_HOTSPOT_MODE,
-	UI_CPS,
-	UI_CHANNEL_QUICK_MENU,
-	UI_VFO_QUICK_MENU,
-	UI_LOCK_SCREEN,
+	MENU_OPTIONS,// Top level menu 'Options'
+	MENU_GENERAL,// General options
+	MENU_RADIO,// Radio options
+	MENU_DISPLAY,// Display options
+	MENU_SOUND,// Sound options
+	MENU_SATELLITE,
+#if defined(HAS_GPS)
+	MENU_GPS,
+#endif
 	MENU_CONTACT_LIST,
 	MENU_DTMF_CONTACT_LIST,
 	MENU_CONTACT_QUICKLIST,
 	MENU_CONTACT_LIST_SUBMENU,
 	MENU_CONTACT_DETAILS,
-	MENU_CONTACT_NEW,
 	MENU_LANGUAGE,
-	UI_PRIVATE_CALL,
+	MENU_CALIBRATION,
+#if defined(HAS_COLOURS)
+	MENU_THEME,
+#endif
+	UI_CHANNEL_QUICK_MENU,
+	UI_VFO_QUICK_MENU,
+	MENU_CHANNEL_DETAILS,
+	MENU_FIRMWARE_INFO,
+#if !defined(PLATFORM_GD77S)
+	MENU_APRS,
+#endif
+	// *** Add new menus to be accessed using quickkey (ID: 0..31) above this line ***
 	UI_MESSAGE_BOX,
+	UI_HOTSPOT_MODE,
+	UI_CPS,
+	MENU_NUMERICAL_ENTRY,
+	UI_TX_SCREEN,
+	UI_SPLASH_SCREEN,
+	UI_POWER_OFF,
+	UI_VFO_MODE,
+	UI_CHANNEL_MODE,
+	UI_LOCK_SCREEN,
+	UI_PRIVATE_CALL,
+	MENU_CONTACT_NEW,
+#if defined(HAS_COLOURS)
+	MENU_THEME_ITEMS_BROWSER,
+	MENU_COLOUR_PICKER,
+#endif
 	NUM_MENU_ENTRIES
+};
+
+
+// QuickMenus
+enum CHANNEL_SCREEN_QUICK_MENU_ITEMS
+{
+	CH_SCREEN_QUICK_MENU_COPY2VFO = 0,
+	CH_SCREEN_QUICK_MENU_COPY_FROM_VFO,
+	CH_SCREEN_QUICK_MENU_FILTER_FM,
+	CH_SCREEN_QUICK_MENU_FILTER_DMR,
+	CH_SCREEN_QUICK_MENU_DMR_CC_SCAN,
+	CH_SCREEN_QUICK_MENU_FILTER_DMR_TS,
+	CH_SCREEN_QUICK_MENU_TALKAROUND,
+	CH_SCREEN_QUICK_MENU_ROAMING,
+	CH_SCREEN_QUICK_MENU_AUDIO_MUTE,
+	NUM_CH_SCREEN_QUICK_MENU_ITEMS
+};
+
+enum VFO_SCREEN_QUICK_MENU_ITEMS
+{
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_RD5R) || defined(PLATFORM_DM1801A) || defined(PLATFORM_MD9600) || defined(PLATFORM_MDUV380) || defined(PLATFORM_MD380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
+	VFO_SCREEN_QUICK_MENU_VFO_A_B = 0,
+	VFO_SCREEN_QUICK_MENU_TX_SWAP_RX,
+#elif defined(PLATFORM_DM1801)
+	VFO_SCREEN_QUICK_MENU_TX_SWAP_RX = 0,
+#endif
+	VFO_SCREEN_QUICK_MENU_BOTH_TO_RX,
+	VFO_SCREEN_QUICK_MENU_BOTH_TO_TX,
+	VFO_SCREEN_QUICK_MENU_FILTER_FM,
+	VFO_SCREEN_QUICK_MENU_FILTER_DMR,
+	VFO_SCREEN_QUICK_MENU_DMR_CC_SCAN,
+	VFO_SCREEN_QUICK_MENU_FILTER_DMR_TS,
+	VFO_SCREEN_QUICK_MENU_VFO_TO_NEW,
+	VFO_SCREEN_QUICK_MENU_TONE_SCAN,
+	VFO_SCREEN_QUICK_MENU_DUAL_SCAN,
+	VFO_SCREEN_QUICK_MENU_FREQ_BIND_MODE,
+	VFO_SCREEN_QUICK_MENU_AUDIO_MUTE,
+	NUM_VFO_SCREEN_QUICK_MENU_ITEMS
 };
 
 
@@ -236,11 +391,13 @@ enum MENU_SCREENS
 #define QUICKKEY_MENULONGVALUE(m, e)  ((QUICKKEY_MENU << 15) | ((m & 0x1f) << 10) | (e & 0x1ff))
 #define QUICKKEY_CONTACTVALUE(c)      (c)
 
-enum QUICK_FUNCTIONS {  FUNC_START_SCANNING = QUICKKEY_MENUVALUE(0, 0, 1),
-						FUNC_RIGHT = 0x11,
-						FUNC_LEFT = 0x12,
-						FUNC_TOGGLE_TORCH = QUICKKEY_MENUVALUE(0, 0, 2),
-						FUNC_REDRAW = QUICKKEY_MENUVALUE(0, 0, 3)
+enum QUICK_FUNCTIONS
+{
+	FUNC_START_SCANNING = QUICKKEY_MENUVALUE(0, 0, 1),
+	FUNC_RIGHT = 0x11,
+	FUNC_LEFT = 0x12,
+	FUNC_TOGGLE_TORCH = QUICKKEY_MENUVALUE(0, 0, 2),
+	FUNC_REDRAW = QUICKKEY_MENUVALUE(0, 0, 3)
 };
 
 // This is used to store current position in menus. The system keeps track of its value, e.g entering in
@@ -249,9 +406,9 @@ enum QUICK_FUNCTIONS {  FUNC_START_SCANNING = QUICKKEY_MENUVALUE(0, 0, 1),
 
 typedef struct
 {
-	int 					currentItemIndex;
-	int 					startIndex;
-	int 					endIndex;
+	int32_t 				currentItemIndex;
+	int32_t 				startIndex;
+	int32_t 				numItems;
 	int 					lightTimer;
 	menuItemNewData_t		*currentMenuList;
 	menuControlDataStruct_t	controlData;
@@ -261,9 +418,24 @@ typedef struct
 	const menuItemsList_t	*data[];
 } menuDataGlobal_t;
 
+enum
+{
+	RADIO_INFOS_BATTERY_LEVEL = 0,
+	RADIO_INFOS_CURRENT_TIME,
+	RADIO_INFOS_DATE,
+	RADIO_INFOS_LOCATION,
+	RADIO_INFOS_TEMPERATURE_LEVEL,
+	RADIO_INFOS_BATTERY_GRAPH,
+	NUM_RADIO_INFOS_MENU_ITEMS,
+	RADIO_INFOS_UP_TIME,
+	RADIO_INFOS_TIME_ALARM
+};
+
 extern menuDataGlobal_t 		menuDataGlobal;
 extern const menuItemsList_t 	menuDataMainMenu;
 extern const menuItemsList_t 	menuDataContact;
+extern const menuItemsList_t 	menuDataOptions;
+extern bool lockscreenIsRearming;
 
 menuStatus_t uiVFOMode(uiEvent_t *event, bool isFirstRun);
 menuStatus_t uiVFOModeQuickMenu(uiEvent_t *event, bool isFirstRun);
@@ -281,7 +453,8 @@ menuStatus_t menuNumericalEntry(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuTxScreen(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuRSSIScreen(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuLastHeard(uiEvent_t *event, bool isFirstRun);
-menuStatus_t menuOptions(uiEvent_t *event, bool isFirstRun);
+menuStatus_t menuGeneralOptions(uiEvent_t *event, bool isFirstRun);
+menuStatus_t menuRadioOptions(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuDisplayOptions(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuSoundOptions(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuCredits(uiEvent_t *event, bool isFirstRun);
@@ -293,8 +466,19 @@ menuStatus_t menuContactListSubMenu(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuContactDetails(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuLanguage(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuPrivateCall(uiEvent_t *event, bool isFirstRun);
-
 menuStatus_t uiMessageBox(uiEvent_t *event, bool isFirstRun);
-
+menuStatus_t menuSatelliteScreen(uiEvent_t *ev, bool isFirstRun);
+#if defined(HAS_GPS)
+menuStatus_t menuGPS(uiEvent_t *event, bool isFirstRun);
+#endif
+menuStatus_t menuCalibration(uiEvent_t *ev, bool isFirstRun);
+#if !defined(PLATFORM_GD77S)
+menuStatus_t menuAPRSOptions(uiEvent_t *ev, bool isFirstRun);
+#endif
+#if defined(HAS_COLOURS)
+menuStatus_t menuThemeOptions(uiEvent_t *ev, bool isFirstRun);
+menuStatus_t menuThemeItemsBrowser(uiEvent_t *ev, bool isFirstRun);
+menuStatus_t menuColourPicker(uiEvent_t *ev, bool isFirstRun);
+#endif
 
 #endif

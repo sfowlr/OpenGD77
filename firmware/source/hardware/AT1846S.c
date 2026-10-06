@@ -1,24 +1,35 @@
 /*
- * Copyright (C)2019 Kai Ludwig, DG4KLU
+ * Copyright (C) 2019      Kai Ludwig, DG4KLU
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 
 #include "hardware/AT1846S.h"
 #include "functions/settings.h"
 #include "functions/trx.h"
+#include "functions/rxPowerSaving.h"
 #if defined(USING_EXTERNAL_DEBUGGER)
 #include "SeggerRTT/RTT/SEGGER_RTT.h"
 #endif
@@ -31,7 +42,7 @@ typedef struct
 } RegCache_t;
 
 static RegCache_t registerCache[127];// all values will be initialised to false,0,0 because its a global
-static int currentRegisterBank = 0;
+static uint8_t currentRegisterBank = 0; // offset in cached page array
 
 static const uint8_t AT1846InitSettings[][AT1846_BYTES_PER_COMMAND] = {
 		{0x30, 0x00, 0x04}, // Poweron 1846s
@@ -169,67 +180,68 @@ const uint8_t AT1846DMRSettings[][AT1846_BYTES_PER_COMMAND] = {
 
 
 
-void I2C_AT1846S_send_Settings(const uint8_t settings[][AT1846_BYTES_PER_COMMAND], int numSettings)
+static void I2C_AT1846S_send_Settings(const uint8_t settings[][AT1846_BYTES_PER_COMMAND], int numSettings)
 {
-	//taskENTER_CRITICAL();
+	taskENTER_CRITICAL();
 	for(int i = 0; i < numSettings; i++)
 	{
-		AT1846SWriteReg2byte(settings[i][0], settings[i][1], settings[i][2]);
+		radioWriteReg2byte(settings[i][0], settings[i][1], settings[i][2]);
 	}
-	//taskEXIT_CRITICAL();
+	taskEXIT_CRITICAL();
 }
 
-void AT1846Init(void)
+void radioInit(void)
 {
+	memset(&registerCache, 0, sizeof(registerCache));
+
 	// --- start of AT1846_init()
-	//taskENTER_CRITICAL();
-	AT1846SWriteReg2byte(0x30, 0x00, 0x01); // Soft reset
-	vTaskDelay(portTICK_PERIOD_MS * 50);
+	radioWriteReg2byte(0x30, 0x00, 0x01); // Soft reset
+	vTaskDelay((50 / portTICK_PERIOD_MS));
 
 	I2C_AT1846S_send_Settings(AT1846InitSettings, sizeof(AT1846InitSettings) / AT1846_BYTES_PER_COMMAND);
-	vTaskDelay(portTICK_PERIOD_MS * 50);
+	vTaskDelay((50 / portTICK_PERIOD_MS));
 
-	AT1846SWriteReg2byte(0x30, 0x40, 0xA6); // chip_cal_en Enable calibration
-	vTaskDelay(portTICK_PERIOD_MS * 100);
+	radioWriteReg2byte(0x30, 0x40, 0xA6); // chip_cal_en Enable calibration
+	vTaskDelay((100 / portTICK_PERIOD_MS));
 
-	AT1846SWriteReg2byte(0x30, 0x40, 0x06); // chip_cal_en Disable calibration
-	vTaskDelay(portTICK_PERIOD_MS * 10);
+	radioWriteReg2byte(0x30, 0x40, 0x06); // chip_cal_en Disable calibration
+	vTaskDelay((10 / portTICK_PERIOD_MS));
 	// Calibration end
 	// --- end of AT1846_init()
 
 	I2C_AT1846S_send_Settings(AT1846FM12P5kHzSettings, sizeof(AT1846FM12P5kHzSettings) / AT1846_BYTES_PER_COMMAND);// initially set the bandwidth for 12.5 kHz
 
-	AT1846SetClearReg2byteWithMask(0x4e, 0xff, 0x3f, 0x00, 0x80); // Select cdcss mode for tx
-	//taskEXIT_CRITICAL();
-	vTaskDelay(portTICK_PERIOD_MS * 200);
+	radioSetClearReg2byteWithMask(0x4e, 0xff, 0x3f, 0x00, 0x80); // Select cdcss mode for tx
+
+	vTaskDelay((200 / portTICK_PERIOD_MS));
 }
 
-void AT1846Postinit(void)
+void radioPostinit(void)
 {
 	I2C_AT1846S_send_Settings(AT1846PostinitSettings, sizeof(AT1846PostinitSettings) / AT1846_BYTES_PER_COMMAND);
 }
 
-void AT1846SetBandwidth(void)
+static void radioSetBandwidth(void)
 {
 	if (trxGetBandwidthIs25kHz())
 	{
 		// 25 kHz settings
 		I2C_AT1846S_send_Settings(AT1846FM25kHzSettings, sizeof(AT1846FM25kHzSettings) / AT1846_BYTES_PER_COMMAND);
-		AT1846SetClearReg2byteWithMask(0x30, 0xCF, 0x9F, 0x30, 0x00); // Set the 25Khz Bits and turn off the Rx and Tx
+		radioSetClearReg2byteWithMask(0x30, 0xCF, 0x9F, 0x30, 0x00); // Set the 25Khz Bits and turn off the Rx and Tx
 	}
 	else
 	{
 		// 12.5 kHz settings
 		I2C_AT1846S_send_Settings(AT1846FM12P5kHzSettings, sizeof(AT1846FM12P5kHzSettings) / AT1846_BYTES_PER_COMMAND);
-		AT1846SetClearReg2byteWithMask(0x30, 0xCF, 0x9F, 0x00, 0x00); // Clear the 25Khz Bits and turn off the Rx and Tx
+		radioSetClearReg2byteWithMask(0x30, 0xCF, 0x9F, 0x00, 0x00); // Clear the 25Khz Bits and turn off the Rx and Tx
 	}
 
-	AT1846SetClearReg2byteWithMask(0x30, 0xFF, 0x9F, 0x00, 0x20); // Turn the Rx On
+	radioSetClearReg2byteWithMask(0x30, 0xFF, 0x9F, 0x00, 0x20); // Turn the Rx On
 }
 
-void AT1846SetMode(void)
+void radioSetMode(void) // Called withing trx.c: in task critical sections
 {
-	AT1846SetBandwidth();
+	radioSetBandwidth();
 
 	if (trxGetMode() == RADIO_MODE_ANALOG)
 	{
@@ -241,22 +253,37 @@ void AT1846SetMode(void)
 	}
 }
 
-void AT1846ReadVoxAndMicStrength(void)
+void radioReadVoxAndMicStrength(void)
 {
-	//taskENTER_CRITICAL();
-	AT1846SReadReg2byte(0x1a, (uint8_t *)&trxTxVox, (uint8_t *)&trxTxMic);
-	//taskEXIT_CRITICAL();
+	uint8_t val1, val2;
+
+	taskENTER_CRITICAL();
+	if (radioReadReg2byte(0x1a, &val1, &val2) == kStatus_Success)
+	{
+		trxTxVox = val1;
+		trxTxMic = val2;
+	}
+	taskEXIT_CRITICAL();
 }
 
-void AT1846ReadRSSIAndNoise(void)
+void radioReadRSSIAndNoise(void)
 {
-	//taskENTER_CRITICAL();
-	AT1846SReadReg2byte(0x1b, (uint8_t *)&trxRxSignal, (uint8_t *)&trxRxNoise);
-	//taskEXIT_CRITICAL();
+	uint8_t val1, val2;
+
+	if (rxPowerSavingIsRxOn())
+	{
+		taskENTER_CRITICAL();
+		if (radioReadReg2byte(0x1b, &val1, &val2) == kStatus_Success)
+		{
+			trxRxSignal = val1;
+			trxRxNoise = val2;
+		}
+		trxDMRSynchronisedRSSIReadPending = false;
+		taskEXIT_CRITICAL();
+	}
 }
 
-
-int AT1846SetClearReg2byteWithMask(uint8_t reg, uint8_t mask1, uint8_t mask2, uint8_t val1, uint8_t val2)
+int radioSetClearReg2byteWithMask(uint8_t reg, uint8_t mask1, uint8_t mask2, uint8_t val1, uint8_t val2)
 {
     status_t status;
 	uint8_t tmp_val1, tmp_val2;
@@ -268,7 +295,7 @@ int AT1846SetClearReg2byteWithMask(uint8_t reg, uint8_t mask1, uint8_t mask2, ui
 	}
 	else
 	{
-		status = AT1846SReadReg2byte(reg, &tmp_val1, &tmp_val2);
+		status = radioReadReg2byte(reg, &tmp_val1, &tmp_val2);
 	    if (status != kStatus_Success)
 	    {
 	    	return status;
@@ -277,12 +304,12 @@ int AT1846SetClearReg2byteWithMask(uint8_t reg, uint8_t mask1, uint8_t mask2, ui
 
 	tmp_val1 = val1 | (tmp_val1 & mask1);
 	tmp_val2 = val2 | (tmp_val2 & mask2);
-	status = AT1846SWriteReg2byte(reg, tmp_val1, tmp_val2);
+	status = radioWriteReg2byte(reg, tmp_val1, tmp_val2);
 
 	return status;
 }
 
-status_t AT1846SReadReg2byte(uint8_t reg, uint8_t *val1, uint8_t *val2)
+status_t radioReadReg2byte(uint8_t reg, uint8_t *val1, uint8_t *val2)
 {
     i2c_master_transfer_t masterXfer;
     status_t status;
@@ -337,7 +364,7 @@ status_t AT1846SReadReg2byte(uint8_t reg, uint8_t *val1, uint8_t *val2)
 	return status;
 }
 
-status_t AT1846SWriteReg2byte(uint8_t reg, uint8_t val1, uint8_t val2)
+status_t radioWriteReg2byte(uint8_t reg, uint8_t val1, uint8_t val2)
 {
     i2c_master_transfer_t masterXfer;
     status_t status;
@@ -349,14 +376,11 @@ status_t AT1846SWriteReg2byte(uint8_t reg, uint8_t val1, uint8_t val2)
     }
     else
     {
-    	if ((registerCache[reg].cached[currentRegisterBank]) && (registerCache[reg].highByte[currentRegisterBank] == val1) &&  (registerCache[reg].lowByte[currentRegisterBank] == val2))
+    	if ((registerCache[reg].cached[currentRegisterBank]) &&
+    			(registerCache[reg].highByte[currentRegisterBank] == val1) &&
+				(registerCache[reg].lowByte[currentRegisterBank] == val2))
     	{
-    		//SEGGER_RTT_printf(0, "%d 0x%02x 0x%02x 0x%02x\n",currentRegisterBank,reg,val1,val2);
     		return kStatus_Success;
-    	}
-    	else
-    	{
-    		//SEGGER_RTT_printf(0, "W            %d 0x%02x 0x%02x 0x%02x\n",currentRegisterBank,reg,val1,val2);
     	}
     }
 
@@ -392,6 +416,50 @@ status_t AT1846SWriteReg2byte(uint8_t reg, uint8_t val1, uint8_t val2)
 	    registerCache[reg].highByte[currentRegisterBank] = val1;
 	    registerCache[reg].lowByte[currentRegisterBank] = val2;
     }
+
+	return status;
+}
+
+
+status_t radioWriteTone1Reg(uint16_t toneFreqVal)
+{
+	uint8_t reg = 0x35;// Tone 1 is reg 0x35
+	i2c_master_transfer_t masterXfer;
+    status_t status;
+    uint8_t buff[4];// Transfers are always 3 bytes but pad to 4 byte boundary
+
+    uint8_t val1 = (toneFreqVal >> 8) & 0xff;
+	uint8_t val2 = (toneFreqVal & 0xff);
+
+    if (isI2cInUse)
+    {
+#if defined(USING_EXTERNAL_DEBUGGER) && defined(DEBUG_I2C)
+    	SEGGER_RTT_printf(0, "Clash in write_I2C_reg_2byte (3) with %d\n",isI2cInUse);
+#endif
+    	return kStatus_Success;
+    }
+    isI2cInUse = 3;
+
+	buff[0] = reg;
+	buff[1] = val1;
+	buff[2] = val2;
+
+    memset(&masterXfer, 0, sizeof(masterXfer));
+    masterXfer.slaveAddress = AT1846S_I2C_MASTER_SLAVE_ADDR_7BIT;
+    masterXfer.direction = kI2C_Write;
+    masterXfer.subaddress = 0;
+    masterXfer.subaddressSize = 0;
+    masterXfer.data = buff;
+    masterXfer.dataSize = 3;
+    masterXfer.flags = kI2C_TransferDefaultFlag;
+
+    status = I2C_MasterTransferBlocking(I2C0, &masterXfer);
+
+    isI2cInUse = 0;
+
+    registerCache[reg].cached[currentRegisterBank] = true;
+    registerCache[reg].highByte[currentRegisterBank] = val1;
+    registerCache[reg].lowByte[currentRegisterBank] = val2;
 
 	return status;
 }

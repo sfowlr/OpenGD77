@@ -1,19 +1,28 @@
 /*
- * Copyright (C)2020 Roger Clark. VK3KYY / G4KYF
+ * Copyright (C) 2020-2025 Roger Clark, VK3KYY / G4KYF
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
 #ifndef _OPENGD77_GPIO_H_
 #define _OPENGD77_GPIO_H_
@@ -43,7 +52,7 @@ extern gpio_pin_config_t pin_config_output;
 #define GPIO_Orange		GPIOA
 #define Pin_Orange		2
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 #define Port_PTT		PORTA
 #define GPIO_PTT		GPIOA
@@ -75,7 +84,29 @@ extern gpio_pin_config_t pin_config_output;
 
 #endif
 
+#if ! defined(PLATFORM_RD5R)
+// Pin 97
+#define Port_GPS_Power PORTD
+#define GPIO_GPS_Power GPIOD
+#define Pin_GPS_Power  4
+#endif
 
+// Pin 99
+#define Port_GPS_Data PORTD
+#define GPIO_GPS_Data GPIOD
+#define Pin_GPS_Data  6
+
+#if ! defined(PLATFORM_RD5R)
+// Make sure these are left floating / N/C so that to make soldering to the MCU GPS Data and power pins, the adjacent pin to the right can be bridged
+// Pin 98
+#define Port_GPS_Floating1 PORTD
+#define GPIO_GPS_Floating1 GPIOD
+#define Pin_GPS_Floating1  5
+// Pin 100
+#define Port_GPS_Floating2 PORTD
+#define GPIO_GPS_Floating2 GPIOD
+#define Pin_GPS_Floating2  7
+#endif
 
 
 /* --------------  Battery power control  ---------------- */
@@ -120,7 +151,10 @@ extern gpio_pin_config_t pin_config_output;
 #define GPIO_VHF_TX_amp_power GPIOE
 #define Pin_VHF_TX_amp_power  3
 
-#elif defined(PLATFORM_DM1801)
+
+
+
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 /* --------------  Battery power control  ---------------- */
 #define Port_Keep_Power_On  PORTE
@@ -236,7 +270,7 @@ extern gpio_pin_config_t pin_config_output;
 #define BOARD_FTM_BASEADDR FTM0
 #define BOARD_FTM_CHANNEL kFTM_Chnl_3
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 #define Port_Display_Light	PORTC
 #define GPIO_Display_Light	GPIOC
@@ -325,7 +359,7 @@ extern gpio_pin_config_t pin_config_output;
 #define GPIO_SPI_FLASH_DO_U  	GPIOE
 #define Pin_SPI_FLASH_DO_U   	4
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 #define Port_SPI_FLASH_CS_U PORTE
 #define GPIO_SPI_FLASH_CS_U GPIOE
@@ -400,7 +434,7 @@ extern gpio_pin_config_t pin_config_output;
 #define GPIO_Key_Row4 	GPIOB
 #define Pin_Key_Row4	23
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 // column lines
 #define Port_Key_Col0   PORTC
@@ -482,7 +516,7 @@ extern gpio_pin_config_t pin_config_output;
 #define GPIO_LEDred		GPIOC
 #define Pin_LEDred		14
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 #define Port_LEDgreen	PORTA
 #define GPIO_LEDgreen	GPIOA
@@ -534,16 +568,16 @@ extern gpio_pin_config_t pin_config_output;
 // Connections with C6000
 
 // Reset
-#define Port_INT_C6000_RESET PORTE
-#define GPIO_INT_C6000_RESET GPIOE
-#define Pin_INT_C6000_RESET  0
+#define Port_C6000_RESET PORTE
+#define GPIO_C6000_RESET GPIOE
+#define Pin_C6000_RESET  0
 
 // Power down
-#define Port_INT_C6000_PWD   PORTE
-#define GPIO_INT_C6000_PWD   GPIOE
-#define Pin_INT_C6000_PWD    1
+#define Port_C6000_PWD   PORTE
+#define GPIO_C6000_PWD   GPIOE
+#define Pin_C6000_PWD    1
 
-#elif defined(PLATFORM_DM1801)
+#elif defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A)
 
 // C6000 interrupts
 
@@ -570,14 +604,14 @@ extern gpio_pin_config_t pin_config_output;
 // Connections with C6000
 
 // Reset
-#define Port_INT_C6000_RESET PORTE
-#define GPIO_INT_C6000_RESET GPIOE
-#define Pin_INT_C6000_RESET  2
+#define Port_C6000_RESET PORTE
+#define GPIO_C6000_RESET GPIOE
+#define Pin_C6000_RESET  2
 
 // Power down
-#define Port_INT_C6000_PWD   PORTE
-#define GPIO_INT_C6000_PWD   GPIOE
-#define Pin_INT_C6000_PWD    3
+#define Port_C6000_PWD   PORTE
+#define GPIO_C6000_PWD   GPIOE
+#define Pin_C6000_PWD    3
 
 #elif defined(PLATFORM_RD5R)
 
@@ -606,14 +640,14 @@ extern gpio_pin_config_t pin_config_output;
 // Connections with C6000
 
 // Reset
-#define Port_INT_C6000_RESET PORTE
-#define GPIO_INT_C6000_RESET GPIOE
-#define Pin_INT_C6000_RESET  0
+#define Port_C6000_RESET PORTE
+#define GPIO_C6000_RESET GPIOE
+#define Pin_C6000_RESET  0
 
 // Power down
-#define Port_INT_C6000_PWD   PORTE
-#define GPIO_INT_C6000_PWD   GPIOE
-#define Pin_INT_C6000_PWD    1
+#define Port_C6000_PWD   PORTE
+#define GPIO_C6000_PWD   GPIOE
+#define Pin_C6000_PWD    1
 
 #endif
 

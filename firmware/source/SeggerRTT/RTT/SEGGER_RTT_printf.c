@@ -1,3 +1,4 @@
+#if defined(USING_EXTERNAL_DEBUGGER)
 /*********************************************************************
 *                SEGGER Microcontroller GmbH & Co. KG                *
 *                        The Embedded Experts                        *
@@ -513,3 +514,4 @@ int SEGGER_RTT_printf(unsigned BufferIndex, const char * sFormat, ...) {
   return r;
 }
 /*************************** End of file ****************************/
+#endif

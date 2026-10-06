@@ -1,43 +1,45 @@
 /*
- * Copyright (C)2019 Roger Clark. VK3KYY / G4KYF
+ * Copyright (C) 2019-2025 Roger Clark, VK3KYY / G4KYF
+ *                         Daniel Caujolle-Bert, F1RMB
  *
- * Using some code ported from MMDVM_HS by Andy CA6JAU
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions
+ * are met:
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer
+ *    in the documentation and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * 4. Use of this source code or binary releases for commercial purposes is strictly forbidden. This includes, without limitation,
+ *    incorporation in a commercial product or incorporation into a product or project which allows commercial use.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
  */
+#include "main.h"
 #include "user_interface/uiLocalisation.h"
 
 #include "user_interface/languages/english.h"
 #if defined(LANGUAGE_BUILD_JAPANESE)
 #include "user_interface/languages/japanese.h"
-#else
-#include "user_interface/languages/french.h"
-#include "user_interface/languages/german.h"
-#include "user_interface/languages/portuguese.h"
-#include "user_interface/languages/catalan.h"
-#include "user_interface/languages/spanish.h"
-#include "user_interface/languages/italian.h"
-#include "user_interface/languages/danish.h"
-#include "user_interface/languages/finnish.h"
-#include "user_interface/languages/polish.h"
-#include "user_interface/languages/turkish.h"
-#include "user_interface/languages/czech.h"
-#include "user_interface/languages/dutch.h"
-#include "user_interface/languages/slovenian.h"
-#include "user_interface/languages/portugues_brazil.h"
 #endif
+
+#if ! defined(LANGUAGE_BUILD_JAPANESE)
+#if defined(PLATFORM_GD77) || defined(PLATFORM_GD77S) || defined(PLATFORM_DM1801) || defined(PLATFORM_DM1801A) || defined(PLATFORM_RD5R)
+__attribute__((section(".upper_text")))
+#endif
+const stringsTable_t userLanguage = { .magicNumber = { LANGUAGE_TAG_MAGIC_NUMBER, { 0x00, 0x00, 0x00, 0x00 } }, .LANGUAGE_NAME = "User" }; // Don't change the version number
+#endif
+
 
 /*
  * Note.
@@ -47,47 +49,30 @@
  * Add new languages at the end of the list
  *
  */
-const stringsTable_t languages[NUM_LANGUAGES]= { 	englishLanguage,        // englishLanguageName
+const stringsTable_t languages[]=
+{
+		englishLanguage,        // englishLanguageName
 #if defined(LANGUAGE_BUILD_JAPANESE)
-													japaneseLanguage,       // japaneseLanguageName
+		japaneseLanguage       // japaneseLanguageName
 #else
-													catalanLanguage,        // catalanLanguageName
-													danishLanguage,         // danishLanguageName
-													frenchLanguage,         // frenchLanguageName
-													germanLanguage,         // deutschGermanLanguageName
-													italianLanguage,        // italianLanguageName
-													portuguesLanguage,      // portuguesLanguageName
-													spanishLanguage,        // spanishLanguageName
-													finnishLanguage,        // suomiFinnishLanguageName
-													polishLanguage,         // polishLanguageName
-													turkishLanguage,        // turkishLanguageName
-													czechLanguage,          // czechLanguageName
-													dutchLanguage,          // nederlandsDutchLanguageName
-													slovenianLanguage,      // slovenianLanguageName
-													portuguesBrazilLanguage // portuguesBrazilLanguageName
+		userLanguage // User language, written by the CPS
 #endif
-													};
+};
 const stringsTable_t *currentLanguage;
 
-// used in menuLanguage
-// needs to be sorted alphabetically, based on the text that is displayed for each language name. With English as the first / default language
-const int LANGUAGE_DISPLAY_ORDER[NUM_LANGUAGES] = {	englishLanguageName,
-#if defined(LANGUAGE_BUILD_JAPANESE)
-													japaneseLanguageName,
+
+uint8_t languagesGetCount(void)
+{
+#if ! defined(LANGUAGE_BUILD_JAPANESE)
+	uint8_t magic[3][4] = { LANGUAGE_TAG_MAGIC_NUMBER, LANGUAGE_TAG_VERSION };
+
+	return ((memcmp(languages[1].magicNumber, magic, sizeof(magic)) == 0) ? 2 : 1);
 #else
-													catalanLanguageName,
-													czechLanguageName,
-													danishLanguageName,
-													deutschGermanLanguageName,
-													frenchLanguageName,
-													italianLanguageName,
-													nederlandsDutchLanguageName,
-													polishLanguageName,
-													portuguesLanguageName,
-													portuguesBrazilLanguageName,
-													slovenianLanguageName,
-													spanishLanguageName,
-													suomiFinnishLanguageName,
-													turkishLanguageName
+	return 2;
 #endif
-													};
+}
+
+char currentLanguageGetSymbol(LanguageSymbol_t s)
+{
+	return currentLanguage->symbols[s];
+}

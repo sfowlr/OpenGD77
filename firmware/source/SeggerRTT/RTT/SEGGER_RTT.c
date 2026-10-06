@@ -1,3 +1,4 @@
+#if defined(USING_EXTERNAL_DEBUGGER)
 /*********************************************************************
 *                SEGGER Microcontroller GmbH & Co. KG                *
 *                        The Embedded Experts                        *
@@ -1455,3 +1456,4 @@ int SEGGER_RTT_TerminalOut (char TerminalId, const char* s) {
 
 
 /*************************** End of file ****************************/
+#endif
