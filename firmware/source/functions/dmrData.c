@@ -129,16 +129,39 @@ int dmrDataBuildCSBK(const uint8_t csbk[10], dmrBurst_t *out)
 	return 1;
 }
 
-// Unconfirmed Rate 1/2 packet, preceded by preamble CSBKs
-int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint32_t src,
-						const uint8_t *data, int length, int preambles, dmrBurst_t *out, int maxBursts)
+// User data octets in an unconfirmed block of the type, 0 if it isn't a data block type
+int dmrDataBlockLength(uint8_t blockType)
 {
-	int blocks = (length + 4 + 11) / 12;
-	int padOctets = (blocks * 12) - 4 - length;
+	switch (blockType)
+	{
+		case DT_RATE_12_DATA:
+			return 12;
+		case DT_RATE_34_DATA:
+			return 18;
+		case DT_RATE_1_DATA:
+			return 24;
+		default:
+			return 0;
+	}
+}
+
+// Unconfirmed packet of Rate 1/2, Rate 3/4 or Rate 1 blocks, preceded by preamble CSBKs
+int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint32_t src,
+						const uint8_t *data, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts)
+{
+	int blockLen = dmrDataBlockLength(blockType);
+
+	if (blockLen == 0)
+	{
+		return 0;
+	}
+
+	int blocks = (length + 4 + blockLen - 1) / blockLen;
+	int padOctets = (blocks * blockLen) - 4 - length;
 	int bursts = preambles + 1 + blocks;
 	uint8_t buf[12];
 
-	if ((length <= 0) || (padOctets > 31) || (blocks > 127) || (bursts > maxBursts) || ((blocks * 12) > DMR_DATA_MAX_PACKET))
+	if ((length <= 0) || (padOctets > 31) || (blocks > 127) || (bursts > maxBursts) || ((blocks * blockLen) > DMR_DATA_MAX_PACKET))
 	{
 		return 0;
 	}
@@ -176,7 +199,7 @@ int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint3
 
 	for (int i = 0; i < blocks; i++)
 	{
-		setBurst(out++, DT_RATE_12_DATA, &txPacket[i * 12], 12);
+		setBurst(out++, blockType, &txPacket[i * blockLen], blockLen);
 	}
 
 	return bursts;
@@ -198,7 +221,7 @@ static uint16_t onesComplementSum(uint32_t sum, const uint8_t *data, int length)
 }
 
 int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
-						const uint8_t *payload, int length, int preambles, dmrBurst_t *out, int maxBursts)
+						const uint8_t *payload, int length, uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts)
 {
 	DMR_DATA_BUFFER static uint8_t ip[DMR_DATA_MAX_PACKET];
 	int total = 28 + length;
@@ -230,13 +253,13 @@ int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, ui
 	sum = ~onesComplementSum(sum, &ip[20], 8 + length);
 	putU16(&ip[26], (sum == 0) ? 0xFFFF : sum);
 
-	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, group, dst, src, ip, total, preambles, out, maxBursts);
+	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, group, dst, src, ip, total, blockType, preambles, out, maxBursts);
 }
 
 // Motorola TMS simple text message: length, header (0xA0, or 0xE0 to request an ACK), no address,
 // sequence number, encoding, then the text as UTF-16LE
 int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
-						int preambles, dmrBurst_t *out, int maxBursts)
+						uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts)
 {
 	DMR_DATA_BUFFER static uint8_t tms[6 + (2 * 140)];
 	int textLen = strlen(text);
@@ -259,7 +282,7 @@ int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, ui
 		tms[7 + (2 * i)] = 0x00;
 	}
 
-	return dmrDataBuildUDP(group, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, tms, length, preambles, out, maxBursts);
+	return dmrDataBuildUDP(group, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, tms, length, blockType, preambles, out, maxBursts);
 }
 
 // Figure 8.5 response header: class 0, type 1 (ACK), status = N(S) of the packet being acknowledged
@@ -283,7 +306,7 @@ int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *
 {
 	uint8_t ack[5] = { 0x00, 0x03, 0xBF, 0x00, seqByte };
 
-	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, ack, sizeof(ack), 0, out, maxBursts);
+	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, ack, sizeof(ack), DT_RATE_12_DATA, 0, out, maxBursts);
 }
 
 void dmrDataRxReset(void)

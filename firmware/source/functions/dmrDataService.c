@@ -62,6 +62,7 @@ enum { USB_SEND_BURSTS = 0, USB_SEND_TMS, USB_SEND_UDP, USB_SEND_PACKET };
 
 #define USB_SEND_FLAG_GROUP		0x01
 #define USB_SEND_FLAG_ACK		0x02
+#define USB_SEND_RATE_SHIFT		2		// flag bits 2-3: the block rate of kinds 1-3, 0 Rate 1/2, 1 Rate 3/4, 2 Rate 1
 
 DMR_DATA_BUFFER static dmrBurst_t txBursts[DMR_DATA_MAX_BURSTS];
 static int txBurstCount = 0;
@@ -134,7 +135,7 @@ static bool queueTx(int count)
 	return true;
 }
 
-bool dmrDataServiceSendSMS(bool group, uint32_t dst, const char *text, bool ackRequested)
+static bool sendSMS(bool group, uint32_t dst, const char *text, bool ackRequested, uint8_t blockType)
 {
 	if (dmrDataServiceIsBusy() || !canTransmit())
 	{
@@ -142,17 +143,27 @@ bool dmrDataServiceSendSMS(bool group, uint32_t dst, const char *text, bool ackR
 	}
 
 	smsSeq = (smsSeq + 1) & 0x1F;
-	return queueTx(dmrDataBuildTMS(group, dst, trxDMRID, text, smsSeq, ackRequested, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+	return queueTx(dmrDataBuildTMS(group, dst, trxDMRID, text, smsSeq, ackRequested, blockType, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
 }
 
-bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+static bool sendUDP(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length, uint8_t blockType)
 {
 	if (dmrDataServiceIsBusy() || !canTransmit())
 	{
 		return false;
 	}
 
-	return queueTx(dmrDataBuildUDP(group, dst, trxDMRID, srcPort, dstPort, payload, length, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+	return queueTx(dmrDataBuildUDP(group, dst, trxDMRID, srcPort, dstPort, payload, length, blockType, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+}
+
+bool dmrDataServiceSendSMS(bool group, uint32_t dst, const char *text, bool ackRequested)
+{
+	return sendSMS(group, dst, text, ackRequested, DT_RATE_12_DATA);
+}
+
+bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t srcPort, uint16_t dstPort, const uint8_t *payload, int length)
+{
+	return sendUDP(group, dst, srcPort, dstPort, payload, length, DT_RATE_12_DATA);
 }
 
 bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count)
@@ -421,6 +432,13 @@ static bool usbSend(const uint8_t *r)
 	bool group = (r[1] & USB_SEND_FLAG_GROUP) != 0;
 	uint32_t dst = (r[2] << 16) | (r[3] << 8) | r[4];
 	uint16_t port = (r[5] << 8) | r[6];
+	static const uint8_t RATES[4] = { DT_RATE_12_DATA, DT_RATE_34_DATA, DT_RATE_1_DATA, 0 };
+	uint8_t blockType = RATES[(r[1] >> USB_SEND_RATE_SHIFT) & 0x03];
+
+	if ((r[0] != USB_SEND_BURSTS) && (blockType == 0))
+	{
+		return false;
+	}
 
 	switch (r[0])
 	{
@@ -428,16 +446,16 @@ static bool usbSend(const uint8_t *r)
 			return dmrDataServiceSendBursts(txBursts, txBurstCount);
 		case USB_SEND_TMS:
 			usbBuffer[(usbBufferLength < USB_BUFFER_SIZE) ? usbBufferLength : (USB_BUFFER_SIZE - 1)] = 0;
-			return dmrDataServiceSendSMS(group, dst, (const char *)usbBuffer, (r[1] & USB_SEND_FLAG_ACK) != 0);
+			return sendSMS(group, dst, (const char *)usbBuffer, (r[1] & USB_SEND_FLAG_ACK) != 0, blockType);
 		case USB_SEND_UDP:
-			return dmrDataServiceSendUDP(group, dst, port, port, usbBuffer, usbBufferLength);
+			return sendUDP(group, dst, port, port, usbBuffer, usbBufferLength, blockType);
 		case USB_SEND_PACKET:
 			if (dmrDataServiceIsBusy() || !canTransmit())
 			{
 				return false;
 			}
 			return queueTx(dmrDataBuildPacket(port >> 8, port & 0x0F, group, dst, trxDMRID, usbBuffer, usbBufferLength,
-									DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+									blockType, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
 		default:
 			return false;
 	}

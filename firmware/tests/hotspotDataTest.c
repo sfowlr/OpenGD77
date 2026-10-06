@@ -62,7 +62,7 @@ static int packet(dmrBurst_t *out)
 	uint8_t data[60];
 
 	memset(data, 0x55, sizeof(data));
-	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, false, 9990199, 3101276, data, sizeof(data), 0, out, DMR_DATA_MAX_BURSTS);
+	return dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, DMR_SAP_IP, false, 9990199, 3101276, data, sizeof(data), DT_RATE_12_DATA, 0, out, DMR_DATA_MAX_BURSTS);
 }
 
 static dmrBurst_t storage[DMR_DATA_MAX_BURSTS];

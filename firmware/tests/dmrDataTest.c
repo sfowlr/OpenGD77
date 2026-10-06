@@ -64,7 +64,7 @@ static void testTMSRoundTrip(bool group, int preambles)
 {
 	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
 	const char *text = "Hello from OpenGD77, this is a longer message to use a few blocks";
-	int n = dmrDataBuildTMS(group, 235, 3141592, text, 5, false, preambles, bursts, DMR_DATA_MAX_BURSTS);
+	int n = dmrDataBuildTMS(group, 235, 3141592, text, 5, false, DT_RATE_12_DATA, preambles, bursts, DMR_DATA_MAX_BURSTS);
 
 	CHECK(n > (preambles + 1));
 	CHECK(bursts[preambles].dataType == DT_DATA_HEADER);
@@ -106,11 +106,13 @@ static void testTMSRoundTrip(bool group, int preambles)
 	dumpBursts(group ? "tms-group" : "tms-private", bursts, n);
 }
 
-static void testPadding(void)
+static void testPadding(uint8_t blockType)
 {
 	// Every user data length from 1 to a full packet must round trip, which exercises all the pad octet counts
 	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
-	uint8_t data[400];
+	uint8_t data[DMR_DATA_MAX_PACKET];
+	int blockLen = dmrDataBlockLength(blockType);
+	int longest = 0;
 
 	for (int i = 0; i < (int)sizeof(data); i++)
 	{
@@ -119,16 +121,43 @@ static void testPadding(void)
 
 	for (int len = 1; len <= (int)sizeof(data); len++)
 	{
-		int n = dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, 0x09, false, 1, 2, data, len, 0, bursts, DMR_DATA_MAX_BURSTS);
+		int n = dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, 0x09, false, 1, 2, data, len, blockType, 0, bursts, DMR_DATA_MAX_BURSTS);
+		int blocks = (len + 4 + blockLen - 1) / blockLen;
 
 		if (n == 0)
 		{
-			CHECK(((len + 4 + 11) / 12) >= DMR_DATA_MAX_BURSTS);
+			CHECK(((blocks + 1) > DMR_DATA_MAX_BURSTS) || ((blocks * blockLen) > DMR_DATA_MAX_PACKET));
 			break;
 		}
+		CHECK(n == (blocks + 1));
+		CHECK(bursts[1].dataType == blockType && bursts[1].length == blockLen);
 		CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
-		CHECK(dmrDataRxPacket.length == len);
+		CHECK(dmrDataRxPacket.length == len && dmrDataRxPacket.dataType == blockType);
 		CHECK(memcmp(dmrDataRxPacket.data, data, len) == 0);
+		longest = len;
+	}
+	CHECK(longest >= 400);
+	CHECK(dmrDataBuildPacket(DMR_DPF_UNCONFIRMED, 0x09, false, 1, 2, data, 10, DT_CSBK, 0, bursts, DMR_DATA_MAX_BURSTS) == 0);
+}
+
+// TMS with Rate 3/4 and Rate 1 blocks, printed for the external decoder
+static void testTMSRates(void)
+{
+	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
+	const char *text = "Rate test from OpenGD77, long enough for a few blocks of each size";
+
+	for (int r = 0; r < 2; r++)
+	{
+		uint8_t blockType = r ? DT_RATE_1_DATA : DT_RATE_34_DATA;
+		int n = dmrDataBuildTMS(false, 235, 3141592, text, 3, false, blockType, 1, bursts, DMR_DATA_MAX_BURSTS);
+		dmrDataUDP_t udp;
+		dmrDataTMS_t tms;
+
+		CHECK(n > 2);
+		CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
+		CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp) && dmrDataDecodeTMS(udp.payload, udp.length, &tms));
+		CHECK(strcmp(tms.text, text) == 0);
+		dumpBursts(r ? "tms-rate1" : "tms-rate34", bursts, n);
 	}
 }
 
@@ -240,7 +269,7 @@ static void testConfirmedRx(void)
 static void testFrames(void)
 {
 	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
-	int n = dmrDataBuildTMS(false, 235, 3141592, "frame test", 1, true, 1, bursts, DMR_DATA_MAX_BURSTS);
+	int n = dmrDataBuildTMS(false, 235, 3141592, "frame test", 1, true, DT_RATE_12_DATA, 1, bursts, DMR_DATA_MAX_BURSTS);
 	uint8_t frame[33];
 	dmrBurst_t back;
 
@@ -329,7 +358,10 @@ int main(void)
 	testCRC32();
 	testTMSRoundTrip(false, 0);
 	testTMSRoundTrip(true, 3);
-	testPadding();
+	testPadding(DT_RATE_12_DATA);
+	testPadding(DT_RATE_34_DATA);
+	testPadding(DT_RATE_1_DATA);
+	testTMSRates();
 	testTMSAck();
 	testRadioDeskVectors();
 	testCSBK();
