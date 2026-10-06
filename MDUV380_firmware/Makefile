@@ -49,7 +49,6 @@ CODEC_PLACEHOLDER := application/source/linkerdata/codec_bin_section_1.bin
 CODEC_ADDRESS     := 0x0807537C
 
 .SUFFIXES:
-.SECONDARY:
 
 all: $(BUILD)/firmware.elf $(BUILD)/firmware.bin
 
@@ -67,6 +66,9 @@ $(BUILD)/%.o: %.s
 $(BUILD)/%.o: %.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
+
+# As in the CubeIDE project: the codec calls are inline assembly that relies on the unoptimised stack frame
+$(BUILD)/application/source/dmr_codec/codec_interface.o: CFLAGS += -O0
 
 # codec_bin.S includes the codec placeholder relative to the project's Debug directory
 $(BUILD)/application/source/dmr_codec/codec_bin.o: application/source/dmr_codec/codec_bin.S $(CODEC_PLACEHOLDER)

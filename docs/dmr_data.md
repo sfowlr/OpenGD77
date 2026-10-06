@@ -53,21 +53,22 @@ at compile time in `ipGateway.h` (each a base and a /8 to /24 prefix; the low bi
 
 | Range | Default | Use |
 | --- | --- | --- |
-| Individual | 12.0.0.0/8 | DMR IDs. DHCP gives the host its own radio's ID: radio 10005 gives 12.0.39.21 (10.250.39.21 with 10.250.0.0/16) |
+| Individual | 11.0.0.0/8 | DMR IDs. DHCP gives the host its own radio's ID: radio 10005 gives 11.0.39.21 (10.250.39.21 with 10.250.0.0/16) |
 | Multicast | 225.0.0.0/8 | Talkgroups both ways: send to 225.x.y.z, and group data received over the air arrives there (join the group on the radio's interface) |
-| Link | 12.0.0.0/8 | The host's subnet, it holds the individual range |
-| Group (optional) | none | A unicast range for sending to talkgroups, e.g. 13.0.0.0/8 with a /7 link, for hosts that ignore the multicast route |
+| Link | 11.0.0.0/8 | The host's subnet, it holds the individual range |
+| Group (optional) | none | A unicast range for sending to talkgroups, e.g. 10.251.0.0/16 next to 10.250.0.0/16 with a /15 link, for hosts that ignore the multicast route |
 
 - IDs bigger than a range are truncated to its low bits. In a /16, radio 0x010203 gets 10.250.2.3, and its host also
   gets the data sent over the air to radio 0x0203; sending to 10.250.2.3 reaches radio 0x0203. Overlaps are possible
   but unlikely, since high IDs are sparse. The radio itself still only acknowledges data to its full ID.
 - Every radio is on the link. Option 121/249 adds only the route for the multicast range (and the optional group
   range when it isn't on the link), with no default route, so the host's other traffic is unaffected.
-- The radio itself is the top individual address but one (12.255.255.254). The subnet broadcast (12.255.255.255) is
+- The radio itself is the top individual address but one (11.255.255.254). The subnet broadcast (11.255.255.255) is
   the all call, for UDP ports 4000-4099 only, so that the host's own broadcasts (NetBIOS, discovery, LAN sync) never
   key the radio. The gateway only sends what has the host's own source address over the air.
 - The lease is 10 minutes. If the radio's DMR ID changes, the renewal is refused and the host gets the new address.
-- Every IP packet received over the air goes to the host, from the source's individual address. Data between two
+- Every IP packet received over the air goes to the host, from the source's individual address (over the air the
+  packets use the Motorola CAI addresses 12.x.y.z / 225.x.y.z, the gateway translates). Data between two
   other radios goes to a MAC address the host doesn't have, so the host ignores it but Wireshark (promiscuous) shows
   it.
 - Every data burst received (CSBKs, headers, blocks, also those with CRC errors) is also sent as a UDP broadcast
@@ -85,15 +86,15 @@ The STM32F405 USB controller has too few endpoints for the serial port and the n
 radios are one or the other: Menu > Options > General > USB: Serial / Network (switches straight away, saved in
 `BIT_USB_NETWORK`). In network mode the radio is VID 0x1FC9 PID 0x0096, a CDC-NCM adapter alone (with an IAD and the
 same Microsoft OS 1.0 descriptors), and the serial protocol is tunnelled over UDP: datagrams to the radio's address
-(12.255.255.254) port 3334 are handled exactly like data on the serial port, and replies go back to the sender.
+(11.255.255.254) port 3334 are handled exactly like data on the serial port, and replies go back to the sender.
 That covers MMDVMHost and the `D` commands. MMDVMHost's settings for it:
 
 ```
 [Modem]
 Protocol=udp
-ModemAddress=12.255.255.254
+ModemAddress=11.255.255.254
 ModemPort=3334
-LocalAddress=12.0.39.21   # the address the PC got by DHCP (its radio's DMR ID)
+LocalAddress=11.0.39.21   # the address the PC got by DHCP (its radio's DMR ID)
 LocalPort=3335
 ```
 
