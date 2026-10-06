@@ -168,6 +168,7 @@ typedef enum
 #endif
 	BIT_CHANNELS_ARE_READ_ONLY      = (SETTINGS_BITS_BANK_0 | (1 << 27)),
 	BIT_UI_USES_DOUBLE_HEIGHT       = (SETTINGS_BITS_BANK_0 | (1 << 28)),
+	BIT_USB_NETWORK                 = (SETTINGS_BITS_BANK_0 | (1 << 29)),// composite USB serial + network adapter, from the next boot
 
 	// Last usable bit is 29
 	//BIT_xxxxxxx_xxxxxxxxxxxx      = (SETTINGS_BITS_BANK_1 | (1 << 0)),

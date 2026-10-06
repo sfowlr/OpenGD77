@@ -319,6 +319,23 @@ static inline void hrc6000RxInterruptHandler(void);
 static void hrc6000TransitionToTx(void);
 static void hrc6000InitDigitalState(void);
 static void hrc6000TriggerPrivateCallQSODataDisplay(void);
+static void hrc6000DataTick(void);
+
+// Packet data / signalling TX. The bursts are owned by the caller (see HRC6000DataTxStart)
+static const dmrBurst_t *dataTxBursts;
+static volatile int dataTxCount;
+static volatile int dataTxIndex;
+static volatile bool dataTxActive = false;
+static volatile dmrDataTxStatus_t dataTxStatus = DMR_DATA_TX_IDLE;
+static uint8_t dataTxMcuCrc;// state of the CRC_MCU_Control bit (reg 0x40 bit 3), 0xFF when unknown
+static uint32_t dataTxDeadline;
+static const uint32_t DATA_TX_TIMEOUT_MS = 10000;// on top of 60ms per burst, covers the repeater wakeup
+
+// Packet data RX, filled by the ISR and drained by the HR-C6000 task
+#define DATA_RX_QUEUE_SIZE 8
+static dmrBurst_t dataRxQueue[DATA_RX_QUEUE_SIZE];
+static volatile uint8_t dataRxWriteIdx = 0;
+static volatile uint8_t dataRxReadIdx = 0;
 
 static HRC6000_Tone1Config_t savedTone1Config = { .Mode = 0, .Dev = 0, .D1 = 0 };
 
@@ -936,6 +953,45 @@ static inline void hrc6000SysPostAccessInt(void)
 	}
 }
 
+// CSBK, MBC, data header and data blocks. Voice headers, terminators and Idle are not packet data
+static inline bool hrc6000IsPacketDataType(int dataType)
+{
+	return ((dataType >= DT_CSBK) && (dataType <= DT_RATE_34_DATA)) || (dataType == DT_RATE_1_DATA);
+}
+
+static void hrc6000DataRxQueueBurst(int dataType)
+{
+	uint8_t next = (dataRxWriteIdx + 1) % DATA_RX_QUEUE_SIZE;
+
+	if (next == dataRxReadIdx)
+	{
+		return;// overflow, the packet CRC will catch the missing block
+	}
+
+	dmrBurst_t *burst = &dataRxQueue[dataRxWriteIdx];
+	burst->dataType = dataType;
+	burst->length = (dataType == DT_RATE_1_DATA) ? 24 : ((dataType == DT_RATE_34_DATA) ? 18 : 12);
+	burst->flags = hrc.rxCRCisValid ? 0 : DMR_BURST_FLAG_RX_CRC_ERROR;
+	SPI0ReadPageRegByteArray(0x02, 0x00, burst->payload, burst->length);
+	dataRxWriteIdx = next;
+}
+
+static void hrc6000DataTxSendNextBurst(void)
+{
+	const dmrBurst_t *burst = &dataTxBursts[dataTxIndex++];
+	uint8_t mcuCrc = (burst->flags & DMR_BURST_FLAG_MCU_CRC) ? 0x08 : 0x00;
+
+	if (mcuCrc != dataTxMcuCrc)
+	{
+		SPI0ClearPageRegByteWithMask(0x04, 0x40, 0xF7, mcuCrc);// CRC_MCU_Control: send the payload verbatim, or let the HR-C6000 add the CRC
+		dataTxMcuCrc = mcuCrc;
+	}
+
+	SPI0WritePageRegByteArray(0x02, 0x00, burst->payload, burst->length);
+	SPI0WritePageRegByte(0x04, 0x41, 0x80);// Transmit during next Timeslot
+	SPI0WritePageRegByte(0x04, 0x50, burst->dataType << 4);// Data Type, Data, LCSS = 0
+}
+
 static inline void hrc6000SysReceivedDataInt(void)
 {
 	/*
@@ -987,8 +1043,12 @@ static inline void hrc6000SysReceivedDataInt(void)
 		}
 	}
 
+	// Data blocks have no CRC of their own (the packet CRC-32 covers them), so don't drop them on the HR-C6000 CRC flag
+	bool isPacketData = (rxSyncClass == SYNC_CLASS_DATA) && hrc6000IsPacketDataType(rxDataType);
+	bool isDataBlock = isPacketData && (rxDataType >= DT_RATE_12_DATA) && (rxDataType != DT_IDLE);
+
 	if (((slotState == DMR_STATE_RX_1) || (slotState == DMR_STATE_RX_2)) &&
-			((rxPrivacyIndicator != 0) || (hrc6000CrcIsValid() == false) || (hrc6000CheckColourCodeFilter() == false)))
+			((rxPrivacyIndicator != 0) || ((hrc6000CrcIsValid() == false) && !isDataBlock) || (hrc6000CheckColourCodeFilter() == false)))
 	{
 		// Something is not correct
 		return;
@@ -1066,7 +1126,8 @@ static inline void hrc6000SysReceivedDataInt(void)
 				hrc.skipCount = 0;
 				lastHeardClearLastID();// Tell the LastHeard system that this is a new start
 
-				if (settingsUsbMode == USB_MODE_HOTSPOT)
+				// Don't make the hotspot announce a voice call for a data transmission
+				if ((settingsUsbMode == USB_MODE_HOTSPOT) && !isPacketData)
 				{
 					DMR_frame_buffer[AMBE_AUDIO_LENGTH + LC_DATA_LENGTH] = HOTSPOT_RX_START;
 					hrc.hotspotDMRRxFrameBufferAvailable = true;
@@ -1220,6 +1281,14 @@ static inline void hrc6000SysReceivedDataInt(void)
 	if (hrc.transmissionEnabled == false) // ignore the LC data when we are transmitting
 	{
 		hrc6000HandleLCData();
+	}
+
+	// Packet data on our slot (RMO: our timeslot, DMO: the slot we are locked to)
+	if (isPacketData && (rxPrivacyIndicator == 0) && (slotState < DMR_STATE_TX_START_1) && hrc6000CheckColourCodeFilter() &&
+			(((currentRadioDevice->trxDMRModeRx == DMR_MODE_RMO) && (hrc.timeCode == trxGetDMRTimeSlot()) && (hrc.lastTimeCode != hrc.timeCode)) ||
+			 ((currentRadioDevice->trxDMRModeRx == DMR_MODE_DMO) && (slotState == DMR_STATE_RX_1))))
+	{
+		hrc6000DataRxQueueBurst(rxDataType);
 	}
 
 	if (hrc.timeCode != -1)
@@ -1712,6 +1781,13 @@ void hrc6000TimeslotInterruptHandler(void)
 
 		case DMR_STATE_TX_START_1: // Start TX (second step)
 			LedWrite(LED_RED, 1); // for repeater wakeup
+			if (dataTxActive)
+			{
+				trxIsTransmitting = true;
+				hrc6000DataTxSendNextBurst();
+				slotState = DMR_STATE_DATA_TX_1;
+				break;
+			}
 			hrc6000SendPcOrTgLCHeader();
 			SPI0WritePageRegByte(0x04, 0x41, 0x80);    // Transmit during next Timeslot
 			SPI0WritePageRegByte(0x04, 0x50, 0x10);    // Set Data Type to 0001 (Voice LC Header), Data, LCSS=00
@@ -1884,6 +1960,27 @@ void hrc6000TimeslotInterruptHandler(void)
 			slotState = DMR_STATE_RX_1;
 			hrc.isWaking = WAKING_MODE_NONE;
 			trxIsTransmitting = false;
+			break;
+
+		case DMR_STATE_DATA_TX_1: // Ongoing data TX (inactive timeslot)
+			SPI0WritePageRegByte(0x04, 0x41, 0x00);
+			if (dataTxIndex >= dataTxCount)
+			{
+				// No terminator for data. TX_END_2 restores reg 0x40, which also clears CRC_MCU_Control
+				trxTransmissionEnabled = false;
+				hrc.transmissionEnabled = false;
+				dataTxActive = false;
+				slotState = DMR_STATE_TX_END_2;
+			}
+			else
+			{
+				slotState = DMR_STATE_DATA_TX_2;
+			}
+			break;
+
+		case DMR_STATE_DATA_TX_2: // Ongoing data TX (active timeslot)
+			hrc6000DataTxSendNextBurst();
+			slotState = DMR_STATE_DATA_TX_1;
 			break;
 
 		case DMR_STATE_REPEATER_WAKE_1:
@@ -2421,7 +2518,11 @@ static void hrc6000Tick(void)
 		else
 		{
 			// normal operation. Not waking the repeater
-			if (settingsUsbMode == USB_MODE_HOTSPOT)
+			if (dataTxActive)
+			{
+				// The bursts are sent from the TS ISR, there is no audio to buffer or encode
+			}
+			else if (settingsUsbMode == USB_MODE_HOTSPOT)
 			{
 				if ((hrc.hotspotPostponedFrameHandling == 0) && hrc.hotspotDMRTxFrameBufferEmpty && (wavbuffer_count > 0))
 				{
@@ -2610,7 +2711,79 @@ static void hrc6000Tick(void)
 		}
 	}
 
+	hrc6000DataTick();
+
 	hrc.rxCRCisValid = false;// Reset this
+}
+
+bool HRC6000DataTxStart(const dmrBurst_t *bursts, int count)
+{
+	if ((count <= 0) || (dataTxStatus == DMR_DATA_TX_RUNNING) || trxTransmissionEnabled || trxIsTransmitting ||
+			(trxGetMode() != RADIO_MODE_DIGITAL) || (slotState >= DMR_STATE_TX_START_1))
+	{
+		return false;
+	}
+
+	dataTxBursts = bursts;
+	dataTxCount = count;
+	dataTxIndex = 0;
+	dataTxMcuCrc = 0xFF;
+	dataTxDeadline = ticksGetMillis() + DATA_TX_TIMEOUT_MS + (count * 60);
+	dataTxStatus = DMR_DATA_TX_RUNNING;
+	dataTxActive = true;
+
+	HRC6000ClearIsWakingState();
+	trxEnableTransmission();// The state machine starts from hrc6000Tick (DMO) or after the repeater wakeup (RMO)
+
+	return true;
+}
+
+dmrDataTxStatus_t HRC6000DataTxGetStatus(void)
+{
+	return dataTxStatus;
+}
+
+void HRC6000DataTxClearStatus(void)
+{
+	if (dataTxStatus != DMR_DATA_TX_RUNNING)
+	{
+		dataTxStatus = DMR_DATA_TX_IDLE;
+	}
+}
+
+static void hrc6000DataTxAbort(void)
+{
+	taskENTER_CRITICAL();
+	dataTxActive = false;
+	trxTransmissionEnabled = false;
+	taskEXIT_CRITICAL();
+	dataTxStatus = DMR_DATA_TX_FAILED;
+	LedWrite(LED_RED, 0);
+}
+
+static void hrc6000DataTick(void)
+{
+	if (dataTxStatus == DMR_DATA_TX_RUNNING)
+	{
+		if (dataTxActive)
+		{
+			if ((hrc.isWaking == WAKING_MODE_FAILED) || (ticksGetMillis() > dataTxDeadline))
+			{
+				hrc6000DataTxAbort();
+			}
+		}
+		else if (!trxIsTransmitting)
+		{
+			dataTxStatus = DMR_DATA_TX_DONE;
+			LedWrite(LED_RED, 0);
+		}
+	}
+
+	while (dataRxReadIdx != dataRxWriteIdx)
+	{
+		dmrDataServiceRxBurst(&dataRxQueue[dataRxReadIdx]);
+		dataRxReadIdx = (dataRxReadIdx + 1) % DATA_RX_QUEUE_SIZE;
+	}
 }
 
 static void hrc6000TaskFunction(void *data)

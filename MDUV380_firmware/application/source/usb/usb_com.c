@@ -32,6 +32,7 @@
 #include "user_interface/uiUtilities.h"
 #include "user_interface/menuSystem.h"
 #include "usb/usb_com.h"
+#include "functions/dmrDataService.h"
 #include "functions/ticks.h"
 #include "interfaces/wdog.h"
 #include "hardware/HR-C6000.h"
@@ -942,6 +943,12 @@ static void handleCPSRequest(void)
 #ifdef USB_DEBUG_COMMANDS
 		case 'D':
 			cpsHandleDebugCommand();
+			break;
+#else
+		case 'D':
+			// DMR packet data / signalling, see dmrDataService.c
+			replyLength = dmrDataServiceHandleUSB((uint8_t *)com_requestbuffer, (uint8_t *)usbComSendBuf);
+			hasToReply = true;
 			break;
 #endif
 

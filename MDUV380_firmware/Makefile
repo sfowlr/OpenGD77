@@ -51,7 +51,7 @@ CODEC_ADDRESS     := 0x0807537C
 .SUFFIXES:
 .SECONDARY:
 
-all: $(BUILD)/firmware.bin
+all: $(BUILD)/firmware.elf $(BUILD)/firmware.bin
 
 $(CODEC_PLACEHOLDER):
 	python3 -c "open('$@', 'wb').write(bytes(0x48BB0))"

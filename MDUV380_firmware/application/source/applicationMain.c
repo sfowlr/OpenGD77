@@ -27,6 +27,8 @@
  *
  */
 
+#include "functions/dmrDataService.h"
+#include "usb/usb_ncm.h"
 #include <hardware/HX8353E.h>
 #include <stdbool.h>
 #include <memory.h>
@@ -551,6 +553,8 @@ void applicationMainTask(void)
 		keyOrButtonChanged = false;
 
 		tick_com_request();
+		dmrDataServiceTick();
+		usbNcmTick();
 		handleTimerCallbacks();
 		batteryUpdate();
 
