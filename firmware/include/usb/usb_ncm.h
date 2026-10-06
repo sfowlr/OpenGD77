@@ -19,6 +19,10 @@
 #ifndef _OPENGD77_USB_NCM_H_
 #define _OPENGD77_USB_NCM_H_
 
+#include <stdbool.h>
+#include <stdint.h>
+
+#if defined(CPU_MK22FN512VLL12)
 #include "usb.h"
 #include "usb_device.h"
 #include "usb_device_class.h"
@@ -27,6 +31,7 @@
 usb_status_t USB_DeviceNcmInit(uint8_t controllerId, usb_device_class_config_struct_t *config, class_handle_t *handle);
 usb_status_t USB_DeviceNcmDeinit(class_handle_t handle);
 usb_status_t USB_DeviceNcmEvent(void *handle, uint32_t event, void *param);
+#endif
 
 // True once the host has selected the data interface alternate setting 1 (the link is up)
 bool usbNcmIsUp(void);

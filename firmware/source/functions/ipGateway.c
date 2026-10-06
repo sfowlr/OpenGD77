@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include "functions/ipGateway.h"
+#include "functions/dmrData.h"
 
 #define ETH_HEADER			14
 #define ETHERTYPE_IPV4		0x0800
@@ -44,7 +45,7 @@
 static uint8_t gwMac[6];
 static uint8_t hostMac[6];
 static uint8_t monitorMac[6];				// a unicast address the host doesn't have, for traffic between other radios
-static uint8_t tx[IPGW_MAX_FRAME];
+DMR_DATA_BUFFER static uint8_t tx[IPGW_MAX_FRAME];
 static uint16_t ipId = 0;
 
 static const uint8_t BROADCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };

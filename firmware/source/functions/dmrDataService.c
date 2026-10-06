@@ -51,7 +51,7 @@ enum { USB_SEND_BURSTS = 0, USB_SEND_TMS, USB_SEND_UDP, USB_SEND_PACKET };
 #define USB_SEND_FLAG_GROUP		0x01
 #define USB_SEND_FLAG_ACK		0x02
 
-static dmrBurst_t txBursts[DMR_DATA_MAX_BURSTS];
+DMR_DATA_BUFFER static dmrBurst_t txBursts[DMR_DATA_MAX_BURSTS];
 static int txBurstCount = 0;
 static volatile bool txPending = false;
 static uint32_t txPendingSince;
@@ -67,7 +67,7 @@ static bool ackTMS;
 static uint8_t ackSeqByte;
 static volatile bool newMessage = false;
 
-static dmrDataMessage_t inbox[DMR_DATA_INBOX_SIZE];
+DMR_DATA_BUFFER static dmrDataMessage_t inbox[DMR_DATA_INBOX_SIZE];
 static volatile uint8_t inboxWriteIdx = 0;
 static volatile uint8_t inboxReadIdx = 0;
 
@@ -76,9 +76,9 @@ static volatile uint8_t rxBurstWriteIdx = 0;
 static volatile uint8_t rxBurstReadIdx = 0;
 
 // A UDP datagram received over the air, waiting for the main task to give it to the USB network gateway
-static struct
+static volatile bool airToHostPending = false;
+DMR_DATA_BUFFER static struct
 {
-	volatile bool pending;
 	bool group;
 	uint32_t dst;
 	uint32_t src;
@@ -94,7 +94,7 @@ static uint8_t monitorRecords[RX_BURST_QUEUE_SIZE][MONITOR_RECORD_HEADER + DMR_B
 static volatile uint8_t monitorWriteIdx = 0;
 static volatile uint8_t monitorReadIdx = 0;
 
-static uint8_t usbBuffer[USB_BUFFER_SIZE];
+DMR_DATA_BUFFER static uint8_t usbBuffer[USB_BUFFER_SIZE];
 static int usbBufferLength = 0;
 
 static bool canTransmit(void)
@@ -203,13 +203,13 @@ void dmrDataServiceTick(void)
 		monitorReadIdx = (monitorReadIdx + 1) % RX_BURST_QUEUE_SIZE;
 	}
 
-	if (airToHost.pending)
+	if (airToHostPending)
 	{
 		// Retried on the next tick if the USB IN endpoint is still busy, dropped if the link went down
 		if (!usbNcmIsUp() || ipGatewayDeliverUDP(airToHost.group, airToHost.dst, airToHost.src, airToHost.srcPort,
 													airToHost.dstPort, airToHost.payload, airToHost.length))
 		{
-			airToHost.pending = false;
+			airToHostPending = false;
 		}
 	}
 }
@@ -260,7 +260,7 @@ static void handlePacket(const dmrDataPacket_t *packet)
 	bool isUDP = dmrDataGetUDP(packet, &udp);
 
 	// Everything IP based goes to the USB network host, also between other radios so that a capture shows it
-	if (isUDP && (packet->src != trxDMRID) && usbNcmIsUp() && !airToHost.pending && (udp.length <= (int)sizeof(airToHost.payload)))
+	if (isUDP && (packet->src != trxDMRID) && usbNcmIsUp() && !airToHostPending && (udp.length <= (int)sizeof(airToHost.payload)))
 	{
 		airToHost.group = packet->group;
 		airToHost.dst = packet->dst;
@@ -269,7 +269,7 @@ static void handlePacket(const dmrDataPacket_t *packet)
 		airToHost.dstPort = udp.dstPort;
 		airToHost.length = udp.length;
 		memcpy(airToHost.payload, udp.payload, udp.length);
-		airToHost.pending = true;
+		airToHostPending = true;
 	}
 
 	if (!isForUs(packet))

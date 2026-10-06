@@ -18,8 +18,6 @@
 
 #include <string.h>
 #include "functions/dmrData.h"
-#include "hotspot/dmrDefines.h"
-#include "hotspot/CRC.h"
 
 // Motorola CAI network: individual IDs are 12.x.y.z, groups 225.x.y.z
 #define CAI_NETWORK_INDIVIDUAL		0x0C
@@ -30,10 +28,10 @@
 #define UDPC_PORT_ID_MOTOROLA_TMS	98
 #define DMR_UDP_PORT_ETSI_TEXT		5016
 
-dmrDataPacket_t dmrDataRxPacket;
+DMR_DATA_BUFFER dmrDataPacket_t dmrDataRxPacket;
 
 static uint16_t ipIdentification = 0;
-static uint8_t txPacket[DMR_DATA_MAX_PACKET];
+DMR_DATA_BUFFER static uint8_t txPacket[DMR_DATA_MAX_PACKET];
 
 // RX reassembly state
 static bool    rxCollecting = false;
@@ -80,21 +78,36 @@ uint32_t dmrDataCRC32(const uint8_t *data, int length)
 	return crc;
 }
 
+// CRC-CCITT of the first 10 octets (B.3.7: polynomial 0x1021, initial value 0, inverted), stored MSB first, then masked
+static uint16_t crc16(const uint8_t *buf, uint8_t mask)
+{
+	uint16_t crc = 0;
+
+	for (int i = 0; i < 10; i++)
+	{
+		crc ^= buf[i] << 8;
+		for (int bit = 0; bit < 8; bit++)
+		{
+			crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+		}
+	}
+
+	return ~crc ^ ((mask << 8) | mask);
+}
+
 static void addCRC16(uint8_t *buf, uint8_t mask)
 {
-	CRC_addCCITT162(buf, 12);
-	buf[10] ^= mask;
-	buf[11] ^= mask;
+	uint16_t crc = crc16(buf, mask);
+
+	buf[10] = crc >> 8;
+	buf[11] = crc & 0xFF;
 }
 
 static bool checkCRC16(const uint8_t *in, uint8_t mask)
 {
-	uint8_t buf[12];
+	uint16_t crc = crc16(in, mask);
 
-	memcpy(buf, in, 12);
-	buf[10] ^= mask;
-	buf[11] ^= mask;
-	return CRC_checkCCITT162(buf, 12);
+	return (in[10] == (crc >> 8)) && (in[11] == (crc & 0xFF));
 }
 
 static void setBurst(dmrBurst_t *burst, uint8_t dataType, const uint8_t *payload, uint8_t length)
@@ -187,7 +200,7 @@ static uint16_t onesComplementSum(uint32_t sum, const uint8_t *data, int length)
 int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, uint16_t dstPort,
 						const uint8_t *payload, int length, int preambles, dmrBurst_t *out, int maxBursts)
 {
-	static uint8_t ip[DMR_DATA_MAX_PACKET];
+	DMR_DATA_BUFFER static uint8_t ip[DMR_DATA_MAX_PACKET];
 	int total = 28 + length;
 
 	if (total > (DMR_DATA_MAX_PACKET - 16))
@@ -225,7 +238,7 @@ int dmrDataBuildUDP(bool group, uint32_t dst, uint32_t src, uint16_t srcPort, ui
 int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
 						int preambles, dmrBurst_t *out, int maxBursts)
 {
-	static uint8_t tms[6 + (2 * 140)];
+	DMR_DATA_BUFFER static uint8_t tms[6 + (2 * 140)];
 	int textLen = strlen(text);
 
 	if (textLen > 140)

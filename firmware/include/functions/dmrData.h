@@ -22,6 +22,28 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// Big buffers that need no initial value. On the STM32F405 they go to the CCM RAM (which the startup code doesn't clear)
+#if defined(STM32F405xx)
+#define DMR_DATA_BUFFER __attribute__((section(".ccmram")))
+#else
+#define DMR_DATA_BUFFER
+#endif
+
+// ETSI TS 102 361-1 data types (same values as the hotspot's DT_xxx)
+#ifndef DT_CSBK
+#define DT_VOICE_PI_HEADER		0x00U
+#define DT_VOICE_LC_HEADER		0x01U
+#define DT_TERMINATOR_WITH_LC	0x02U
+#define DT_CSBK					0x03U
+#define DT_MBC_HEADER			0x04U
+#define DT_MBC_CONTINUATION		0x05U
+#define DT_DATA_HEADER			0x06U
+#define DT_RATE_12_DATA			0x07U
+#define DT_RATE_34_DATA			0x08U
+#define DT_IDLE					0x09U
+#define DT_RATE_1_DATA			0x0AU
+#endif
+
 // This module has no hardware dependencies, so it can be unit tested on a host (see firmware/tests)
 
 // Largest burst info field: Rate 1 data is 24 bytes, Rate 3/4 is 18, everything else is 12
