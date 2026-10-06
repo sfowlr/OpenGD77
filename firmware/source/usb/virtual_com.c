@@ -394,6 +394,12 @@ usb_status_t USB_DeviceCallback(usb_device_handle handle, uint32_t event, void *
                 if (interface < USB_CDC_VCOM_INTERFACE_COUNT)
                 {
                     s_cdcVcom.currentInterfaceAlternateSetting[interface] = alternateSetting;
+                    error = kStatus_USB_Success;
+                }
+                else if (USB_DeviceDescriptorsIsComposite() &&
+                         ((interface == USB_NCM_COMM_INTERFACE_INDEX) || (interface == USB_NCM_DATA_INTERFACE_INDEX)))
+                {
+                    error = kStatus_USB_Success;// the CDC-NCM class driver has taken the alternate setting (usb_ncm.c)
                 }
             }
             break;
