@@ -34,9 +34,9 @@ this way, not only the ones the firmware builds itself, and bad CRCs go out as g
 | MBC header, continuation (4, 5) | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | Data header (6), any DPF | yes | yes (bad CRC dropped) | yes | yes (bad CRC dropped) |
 | Rate 1/2 block (7) | yes | yes, also with a CRC error | yes | yes, also with a CRC error |
-| Rate 3/4 block (8), 18 bytes | raw `D` bursts only, untested | yes, also with a CRC error (the HR-C6000 decodes the Trellis code) | yes (Trellis decoded, untested on air) | yes (Trellis coded), also with a CRC error |
+| Rate 3/4 block (8), 18 bytes | raw `D` bursts only, untested | yes, also with a CRC error (the HR-C6000 decodes the Trellis code) | yes (Trellis decoded, single and double bit errors corrected; DM-1701 on air) | yes (Trellis coded), also with a CRC error |
 | Idle (9) | - | - | refused (NAK 4) | - |
-| Rate 1 block (10), 24 bytes | raw `D` bursts only, untested | yes, also with a CRC error | yes (untested on air) | yes, also with a CRC error |
+| Rate 1 block (10), 24 bytes | raw `D` bursts only, untested | yes, also with a CRC error | yes (DM-1701 on air) | yes, also with a CRC error |
 | USBD (11) | - | - | refused (NAK 4) | - |
 
 - A transmission is at most 40 bursts (`DMR_DATA_MAX_BURSTS`), one per slot on the channel's timeslot. It waits for a
@@ -200,6 +200,7 @@ The CPS needs the serial port (on the STM32 radios, serial mode).
 | DM-1701 network adapter on macOS: DHCP (/32), routes, ping, `D` commands and MMDVM over UDP 3334 | on hardware |
 | DM-1701: TMS sent from the host over the network adapter | on air, received and decoded by an SDR |
 | DM-1701: data frames from MMDVM over UDP | on air bit for bit, received by an SDR |
+| DM-1701: Rate 3/4 and Rate 1 packets from MMDVM over UDP (built by RadioDesk's encoder, all at once and paced, Rate 3/4 also with 1-2 bit errors per block) | on air bit for bit (errors corrected), CRC-32 good in RadioDesk's decoder |
 | Data RX on the radio (normal mode and hotspot), confirmed data, the network adapter on Windows and Linux, the MK22 network adapter | not yet on hardware |
 
 ## Host tests
