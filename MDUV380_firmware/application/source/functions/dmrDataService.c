@@ -25,10 +25,21 @@
 #include "functions/ticks.h"
 #include "functions/rxPowerSaving.h"
 #include "user_interface/uiGlobals.h"
-#include "functions/codeplug.h"
 #include "usb/usb_com.h"
 #include "usb/usb_ncm.h"
 #include "functions/ipGateway.h"
+#include "functions/codeplug.h"
+
+// The two trees differ in a few names
+#if defined(STM32F405xx)
+#define MILLIS()				ticksGetMillis()
+#define CHANNEL_IS_RX_ONLY()	(codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) != 0)
+#else
+#define MILLIS()				fw_millis()
+#define CHANNEL_IS_RX_ONLY()	((currentChannelData->flag4 & 0x04) != 0x00)
+static uint32_t userDMRId = 0;			// the codeplug's, read from the EEPROM by the service tick, not on every packet
+static uint32_t userDMRIdReadMs = 0;
+#endif
 
 #define RX_BURST_QUEUE_SIZE		8
 #define USB_BUFFER_SIZE			300
@@ -101,7 +112,7 @@ static int usbBufferLength = 0;
 static bool canTransmit(void)
 {
 	return (settingsUsbMode != USB_MODE_HOTSPOT) && (trxGetMode() == RADIO_MODE_DIGITAL) &&
-			(codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) == 0) &&
+			!CHANNEL_IS_RX_ONLY() &&
 			((nonVolatileSettings.txFreqLimited == BAND_LIMITS_NONE) || trxCheckFrequencyInAmateurBand(currentChannelData->txFreq));
 }
 
@@ -118,7 +129,7 @@ static bool queueTx(int count)
 	}
 
 	txBurstCount = count;
-	txPendingSince = ticksGetMillis();
+	txPendingSince = MILLIS();
 	txPending = true;
 	return true;
 }
@@ -157,6 +168,14 @@ bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count)
 
 void dmrDataServiceTick(void)
 {
+#if !defined(STM32F405xx)
+	if ((userDMRId == 0) || ((MILLIS() - userDMRIdReadMs) > 5000))
+	{
+		userDMRId = codeplugGetUserDMRID();
+		userDMRIdReadMs = MILLIS();
+	}
+#endif
+
 	if (ackPending && !dmrDataServiceIsBusy() && canTransmit())
 	{
 		int n = 0;
@@ -181,7 +200,7 @@ void dmrDataServiceTick(void)
 		{
 			txPending = false;
 		}
-		else if ((ticksGetMillis() - txPendingSince) > START_TIMEOUT_MS)
+		else if ((MILLIS() - txPendingSince) > START_TIMEOUT_MS)
 		{
 			txPending = false;
 		}
@@ -219,7 +238,11 @@ void dmrDataServiceTick(void)
 // the caller's ID) change that, and the host's address must stay put
 uint32_t ipGatewayRadioId(void)
 {
+#if defined(STM32F405xx)
 	return (uiDataGlobal.userDMRId != 0) ? uiDataGlobal.userDMRId : trxDMRID;
+#else
+	return (userDMRId != 0) ? userDMRId : trxDMRID;
+#endif
 }
 
 // USB network gateway: a datagram from the host to a radio ID or talkgroup
