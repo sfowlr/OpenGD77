@@ -212,6 +212,8 @@ The CPS needs the serial port (on the STM32 radios, serial mode).
 | DM-1701: Rate 3/4 and Rate 1 packets from MMDVM over UDP (built by RadioDesk's encoder, all at once and paced, Rate 3/4 also with 1-2 bit errors per block) | on air bit for bit (errors corrected), CRC-32 good in RadioDesk's decoder |
 | DM-1701: packets built by the radio at Rate 3/4 and Rate 1 (`D` send kinds 1-3) | on air, received by an MMDVM_HS: Rate 3/4 TMS 3 of 3 and UDP, Rate 1 raw packet, CRC-32 good; Rate 1 TMS 1 of 3 (single RF bit errors, Rate 1 has no FEC); rate 3 refused |
 | DM-1701: data RX in normal mode, TMS from an MMDVM_HS (467.375 MHz) | Rate 1/2, Rate 3/4 and Rate 1 to its own ID, into the inbox; group TMS to the selected talkgroup taken, to another talkgroup ignored. Rate 1 needs a clean channel (one bit error loses the packet) |
+| DM-1701 network adapter: ICMP passthrough, `ping` from the host to another radio's address (an MMDVM_HS answering echo requests as ID 9990) | on air, 5 of 5 replies (one more request lost to an RF bit error), about 2.25 s round trip |
+| SCTP passthrough, raw DMR data on UDP 40078 | host tests and RadioDesk's decoder only, not yet on air |
 | Data RX in hotspot mode, confirmed data, the network adapter on Windows and Linux, the MK22 network adapter | not yet on hardware |
 
 ## Host tests
