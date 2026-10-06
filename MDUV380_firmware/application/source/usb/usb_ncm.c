@@ -56,6 +56,7 @@
 #define NTB_IN_SIZE						(28 + IPGW_MAX_FRAME + 4)
 #define NTH16_LENGTH					12
 #define NDP16_LENGTH					16		// header + one datagram + the terminating null entry
+#define NDP_MAX_HOPS					8		// NDPs in one NTB, against chains that loop (the datagrams in each are not limited)
 #define REPORTED_SPEED					12000000UL
 
 #define CONFIG_DESCRIPTOR_LENGTH		94
@@ -122,6 +123,7 @@ typedef struct
 	volatile uint16_t outLength;
 	uint16_t parseNdp;				// main task NTB parsing cursor
 	uint16_t parseEntry;
+	uint8_t ndpHops;			// NDPs followed in this NTB, against chains that loop
 	uint16_t inSequence;
 	uint32_t ntbInputSize;
 	uint8_t pendingRequest;			// class request waiting for its OUT data stage
@@ -440,6 +442,7 @@ static uint8_t ncmDataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
 		else if (ncm.outLength >= blockLength)
 		{
 			ncm.parseNdp = get16(&ntbOut[10]);
+			ncm.ndpHops = 0;
 			ncm.parseEntry = 8;
 			ncm.outReady = true;// usbNcmTick re-arms the endpoint
 			return (uint8_t)USBD_OK;
@@ -602,9 +605,7 @@ void usbNcmTick(void)
 	}
 
 	uint16_t blockLength = get16(&ntbOut[8]);
-	int ndpLimit = 8;// against NDP chains that loop
-
-	while (!ncm.inBusy && (ncm.parseNdp != 0) && ndpLimit--)
+	while (!ncm.inBusy && (ncm.parseNdp != 0) && (ncm.ndpHops < NDP_MAX_HOPS))
 	{
 		const uint8_t *ndp = &ntbOut[ncm.parseNdp];
 		uint16_t ndpLength;
@@ -618,6 +619,7 @@ void usbNcmTick(void)
 		if ((ncm.parseEntry + 4) > ndpLength)
 		{
 			ncm.parseNdp = get16(&ndp[6]);// next NDP
+			ncm.ndpHops++;
 			ncm.parseEntry = 8;
 			continue;
 		}
@@ -629,6 +631,7 @@ void usbNcmTick(void)
 		if ((index == 0) || (length == 0))
 		{
 			ncm.parseNdp = get16(&ndp[6]);// end of this NDP's datagrams
+			ncm.ndpHops++;
 			ncm.parseEntry = 8;
 			continue;
 		}
