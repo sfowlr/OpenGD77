@@ -438,6 +438,7 @@ void codeplugAllChannelsInitCache(void);
 void codeplugInitCaches(void);
 
 bool codeplugContactsContainsPC(uint32_t pc);
+uint32_t codeplugContactGetCachedPCForIndex(int index);
 bool codeplugGetGeneralSettings(CodeplugGeneralSettings_t *generalSettingsBuffer);
 bool codeplugGetSignallingDTMF(CodeplugSignallingDTMF_t *signallingDTMFBuffer);
 bool codeplugGetSignallingDTMFDurations(CodeplugSignallingDTMFDurations_t *signallingDTMFDurationsBuffer);

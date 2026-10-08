@@ -37,9 +37,13 @@ ipGatewayTest31: ipGatewayTest.c ../source/functions/ipGateway.c ../include/func
 ipGatewayTestShared: ipGatewayTest.c ../source/functions/ipGateway.c ../include/functions/ipGateway.h
 	$(CC) $(CFLAGS) -DIPGW_LINK_PREFIX=8 '-DPCAP_NAME="ipGatewayTestShared.pcap"' -o $@ ipGatewayTest.c ../source/functions/ipGateway.c
 
-run: dmrDataTest hotspotDataTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared
+dmrPrivacyTest: dmrPrivacyTest.c ../source/functions/dmrPrivacy.c ../include/functions/dmrPrivacy.h
+	$(CC) $(CFLAGS) -o $@ dmrPrivacyTest.c ../source/functions/dmrPrivacy.c
+
+run: dmrDataTest hotspotDataTest dmrPrivacyTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared
 	./dmrDataTest > dmrDataTest.out; status=$$?; grep -E "^(FAIL|# (PASSED|FAILED))" dmrDataTest.out; exit $$status
 	./hotspotDataTest
+	./dmrPrivacyTest
 	./ipGatewayTest
 	./ipGatewayTest16
 	./ipGatewayTest31
@@ -51,6 +55,6 @@ ifneq ($(TSHARK),)
 endif
 
 clean:
-	rm -f dmrDataTest dmrDataTest.out hotspotDataTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTest31.pcap ipGatewayTestShared.pcap ipGatewayTest.expert
+	rm -f dmrDataTest dmrDataTest.out hotspotDataTest dmrPrivacyTest ipGatewayTest ipGatewayTest16 ipGatewayTest31 ipGatewayTestShared ipGatewayTest.pcap ipGatewayTest16.pcap ipGatewayTest31.pcap ipGatewayTestShared.pcap ipGatewayTest.expert
 
 .PHONY: all run clean

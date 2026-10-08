@@ -176,6 +176,15 @@ typedef enum
 	//BIT_xxxxxxx_xxxxxxxxxxxx      = (SETTINGS_BITS_BANK_3 | (1 << 0)),
 } bitfieldOptions_t;
 
+#if !(defined(PLATFORM_RD5R) || defined(PLATFORM_MD9600))
+#define HAS_DMR_PRIVACY // the settings have room for it (dmrPrivacyType and dmrPrivacyKey)
+// dmrPrivacyType: the scheme (dmrPrivacyType_t) in bits 0-2, and in bits 3-15 the index of the one PC contact whose
+// private calls are encrypted (0: none, so nothing is). Group calls and every other contact stay in the clear.
+#define DMR_PRIVACY_SETTING_TYPE(v)                  ((v) & 0x07)
+#define DMR_PRIVACY_SETTING_CONTACT(v)               ((v) >> 3)
+#define DMR_PRIVACY_SETTING(type, contact)           ((uint16_t)(((contact) << 3) | ((type) & 0x07)))
+#endif
+
 #if defined(PLATFORM_MD9600)
 #define RADIO_BANDS_TOTAL_NUM_SQUELCH 2
 #else
@@ -213,8 +222,8 @@ typedef struct
 	int16_t				currentChannelIndexInZone;
 	int16_t				currentChannelIndexInAllZone;
 #else // These two has to be used on any platform but RD5R and MD-9600
-	int16_t				UNUSED_1;
-	int16_t				UNUSED_2;
+	uint16_t			dmrPrivacyType; // DMR voice privacy scheme and contact, see DMR_PRIVACY_SETTING() (0: off)
+	uint16_t			dmrPrivacyKey;
 #endif
 	uint16_t			aprsBeaconingSettingsPart2;
 	uint8_t				txPowerLevel;

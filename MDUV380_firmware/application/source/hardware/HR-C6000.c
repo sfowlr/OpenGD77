@@ -34,6 +34,7 @@
 #endif
 #include "functions/trx.h"
 #include "functions/hotspot.h"
+#include "functions/dmrPrivacy.h"
 #include "user_interface/uiUtilities.h"
 #include "functions/voicePrompts.h"
 #include "interfaces/gpio.h"
@@ -253,6 +254,9 @@ static struct
 	int hotspotPostponedFrameHandling;
 	char talkAliasText[33];
 	uint8_t talkAliasLocation[7];
+	volatile uint8_t rxVoiceSequence; // burst of the received voice in DMR_frame_buffer, 0 (A) to 5 (F)
+	volatile uint8_t rxPrivacy; // dmrPrivacyType_t of the call being received: the privacy contact's private call, with the privacy bit
+	volatile uint8_t txPrivacy; // dmrPrivacyType_t of the call being sent: a private call to the privacy contact
 } hrc = {
 		.hasEncodedAudio = false,
 		.hasAudioData = false,
@@ -310,6 +314,8 @@ volatile int dmrMonitorCapturedTS = -1;
 
 static bool hrc6000CallAcceptFilter(void);
 static void hrc6000SendPcOrTgLCHeader(void);
+static dmrPrivacyType_t hrc6000PrivacyTypeForPC(uint32_t pcId);
+static void hrc6000WriteVoiceBurst(const uint8_t *ambe);
 #ifdef CPU_MK22FN512VLL12
 static inline void hrc6000SysInterruptHandler(void);
 static inline void hrc6000TimeslotInterruptHandler(void);
@@ -687,6 +693,13 @@ static void hrc6000HandleLCData(void)
 {
 	uint8_t LCBuf[LC_DATA_LENGTH];
 	bool lcResult = (SPI0ReadPageRegByteArray(0x02, 0x00, LCBuf, LC_DATA_LENGTH) == kStatus_Success); // read the LC from the C6000
+
+	if (lcResult && hrc6000CrcIsValid() && ((LCBuf[0] == TG_CALL_FLAG) || (LCBuf[0] == PC_CALL_FLAG)))
+	{
+		// The voice header, or the embedded LC on late entry. Only the privacy contact's private calls are decrypted
+		hrc.rxPrivacy = (((LCBuf[0] == PC_CALL_FLAG) && dmrPrivacyLCIsPrivate(LCBuf)) ?
+				hrc6000PrivacyTypeForPC((LCBuf[6] << 16) | (LCBuf[7] << 8) | LCBuf[8]) : DMR_PRIVACY_OFF);
+	}
 
 	if (lcResult && hrc6000CrcIsValid() && hrc.ccHold && (hrc.tsAgreed > TS_STABLE_THRESHOLD))
 	{
@@ -1114,6 +1127,7 @@ static inline void hrc6000SysReceivedDataInt(void)
 				SPI0WritePageRegByte(0x04, 0x41, 0x50);     //Receive only in next timeslot
 				slotState = DMR_STATE_RX_1;
 				hrc.timeCode = -1;
+				hrc.rxPrivacy = DMR_PRIVACY_OFF;
 				hrc.hasEncodedAudio = false;
 				hrc.receivedFramesCount = -1;
 				hrc.insertSilenceFrame = false;
@@ -1220,6 +1234,7 @@ static inline void hrc6000SysReceivedDataInt(void)
 				}
 
 				SPI1ReadPageRegByteArray(0x03, 0x00, DMR_frame_buffer + LC_DATA_LENGTH, AMBE_AUDIO_LENGTH);
+				hrc.rxVoiceSequence = (rxDataType & 0x07) - 1; // the HR-C6000 numbers voice bursts A-F 1-6
 
 				if (settingsUsbMode == USB_MODE_HOTSPOT)
 				{
@@ -1788,6 +1803,8 @@ void hrc6000TimeslotInterruptHandler(void)
 				slotState = DMR_STATE_DATA_TX_1;
 				break;
 			}
+			// Encrypted only when it's a private call to the privacy contact
+			hrc.txPrivacy = ((((trxTalkGroupOrPcId >> 24) & 0xFF) == PC_CALL_FLAG) ? hrc6000PrivacyTypeForPC(trxTalkGroupOrPcId & 0x00FFFFFF) : DMR_PRIVACY_OFF);
 			hrc6000SendPcOrTgLCHeader();
 			SPI0WritePageRegByte(0x04, 0x41, 0x80);    // Transmit during next Timeslot
 			SPI0WritePageRegByte(0x04, 0x50, 0x10);    // Set Data Type to 0001 (Voice LC Header), Data, LCSS=00
@@ -1872,7 +1889,7 @@ void hrc6000TimeslotInterruptHandler(void)
 
 					if (hrc.ambeBufferCount >= NUM_AMBE_BLOCK_PER_DMR_FRAME)
 					{
-						SPI1WritePageRegByteArray(0x03, 0x00, (uint8_t*)hrc.deferredUpdateBufferOutPtr, AMBE_AUDIO_LENGTH);// send the audio bytes to the hardware
+						hrc6000WriteVoiceBurst((uint8_t*)hrc.deferredUpdateBufferOutPtr);// send the audio bytes to the hardware
 						hrc.deferredUpdateBufferOutPtr += AMBE_AUDIO_LENGTH;
 
 						if (hrc.deferredUpdateBufferOutPtr > DEFERRED_UPDATE_BUFFER_END)
@@ -1883,13 +1900,13 @@ void hrc6000TimeslotInterruptHandler(void)
 					}
 					else
 					{
-						SPI1WritePageRegByteArray(0x03, 0x00, SILENCE_AUDIO, AMBE_AUDIO_LENGTH); // send the audio bytes to the hardware
+						hrc6000WriteVoiceBurst(SILENCE_AUDIO); // send the audio bytes to the hardware
 					}
 				}
 			}
 			else
 			{
-				SPI1WritePageRegByteArray(0x03, 0x00, SILENCE_AUDIO, AMBE_AUDIO_LENGTH); // send the audio bytes to the hardware
+				hrc6000WriteVoiceBurst(SILENCE_AUDIO); // send the audio bytes to the hardware
 			}
 
 			//write_SPI_page_reg_bytearray_SPI1(0x03, 0x00, (uint8_t*)(DMR_frame_buffer + LC_DATA_LENGTH), AMBE_AUDIO_LENGTH);// send the audio bytes to the hardware
@@ -2252,13 +2269,49 @@ static void hrc6000TriggerPrivateCallQSODataDisplay(void)
 	hrc.qsoDataTimeout = QSODATA_TIMER_TIMEOUT;
 }
 
+// The voice privacy scheme for a private call with this ID: the configured one when the ID is the privacy contact's,
+// otherwise (and in hotspot mode, where the host has the keys) DMR_PRIVACY_OFF. Reads only RAM, so it's safe in the ISR
+static dmrPrivacyType_t hrc6000PrivacyTypeForPC(uint32_t pcId)
+{
+#if defined(HAS_DMR_PRIVACY)
+	dmrPrivacyType_t type = (dmrPrivacyType_t)DMR_PRIVACY_SETTING_TYPE(nonVolatileSettings.dmrPrivacyType);
+	int contact = DMR_PRIVACY_SETTING_CONTACT(nonVolatileSettings.dmrPrivacyType);
+
+	if ((settingsUsbMode != USB_MODE_HOTSPOT) && (contact != 0) && (pcId != 0) &&
+			dmrPrivacyKeyIsValid(type, nonVolatileSettings.dmrPrivacyKey) && (codeplugContactGetCachedPCForIndex(contact) == pcId))
+	{
+		return type;
+	}
+#endif
+	return DMR_PRIVACY_OFF;
+}
+
+// Hand a voice burst to the HR-C6000, encrypted for the burst position when privacy is on
+static void hrc6000WriteVoiceBurst(const uint8_t *ambe)
+{
+	dmrPrivacyType_t type = (dmrPrivacyType_t)hrc.txPrivacy;
+
+	if (type != DMR_PRIVACY_OFF)
+	{
+		uint8_t burst[AMBE_AUDIO_LENGTH];
+
+		memcpy(burst, ambe, AMBE_AUDIO_LENGTH);
+		dmrPrivacyApplyBurst(type, nonVolatileSettings.dmrPrivacyKey, burst, hrc.txSequence, false);
+		SPI1WritePageRegByteArray(0x03, 0x00, burst, AMBE_AUDIO_LENGTH);
+	}
+	else
+	{
+		SPI1WritePageRegByteArray(0x03, 0x00, (uint8_t *)ambe, AMBE_AUDIO_LENGTH);
+	}
+}
+
 static void hrc6000SendPcOrTgLCHeader(void)
 {
 	uint8_t spi_tx[LC_DATA_LENGTH];
 
 	spi_tx[0] = (trxTalkGroupOrPcId >> 24) & 0xFF;
-	spi_tx[1] = 0x00;
-	spi_tx[2] = 0x00;
+	spi_tx[1] = dmrPrivacyFID((dmrPrivacyType_t)hrc.txPrivacy, 0x00);
+	spi_tx[2] = dmrPrivacyServiceOptions((dmrPrivacyType_t)hrc.txPrivacy, 0x00);
 	spi_tx[3] = (trxTalkGroupOrPcId >> 16) & 0xFF;
 	spi_tx[4] = (trxTalkGroupOrPcId >> 8) & 0xFF;
 	spi_tx[5] = (trxTalkGroupOrPcId >> 0) & 0xFF;
@@ -2629,9 +2682,20 @@ static void hrc6000Tick(void)
 					{
 						hrc.bufferLimitReachedCount--;
 					}
+					else if (hrc.hasAbnormalExit || hrc.insertSilenceFrame)
+					{
+						codecDecode((uint8_t *)SILENCE_AUDIO, 3);
+					}
 					else
 					{
-						codecDecode((uint8_t *)((hrc.hasAbnormalExit || hrc.insertSilenceFrame) ? SILENCE_AUDIO : (DMR_frame_buffer + LC_DATA_LENGTH)), 3);
+						dmrPrivacyType_t privacyType = (dmrPrivacyType_t)hrc.rxPrivacy;
+
+						if (privacyType != DMR_PRIVACY_OFF)
+						{
+							dmrPrivacyApplyBurst(privacyType, nonVolatileSettings.dmrPrivacyKey, (uint8_t *)(DMR_frame_buffer + LC_DATA_LENGTH), hrc.rxVoiceSequence, true);
+						}
+
+						codecDecode((uint8_t *)(DMR_frame_buffer + LC_DATA_LENGTH), 3);
 					}
 				}
 

@@ -900,6 +900,23 @@ int codeplugContactIndexByTGorPC(uint32_t tgorpc, ContactCalltype_t callType, Co
 	return codeplugContactIndexByTGorPCFromNumber(0, tgorpc, callType, contact, optionalTS);
 }
 
+// The private call ID of a PC contact, from the contacts cache (no flash access, safe in an interrupt). 0 when there is none
+uint32_t codeplugContactGetCachedPCForIndex(int index)
+{
+	int numContacts =  codeplugContactsCache.numTGContacts + codeplugContactsCache.numALLContacts + codeplugContactsCache.numPCContacts;
+
+	for (int i = 0; i < numContacts; i++)
+	{
+		if ((codeplugContactsCache.contactsLookupCache[i].index == index) &&
+				((codeplugContactsCache.contactsLookupCache[i].tgOrPCNum >> 24) == CONTACT_CALLTYPE_PC))
+		{
+			return (codeplugContactsCache.contactsLookupCache[i].tgOrPCNum & 0x00FFFFFF);
+		}
+	}
+
+	return 0;
+}
+
 bool codeplugContactsContainsPC(uint32_t pc)
 {
 	int numContacts =  codeplugContactsCache.numTGContacts + codeplugContactsCache.numALLContacts + codeplugContactsCache.numPCContacts;

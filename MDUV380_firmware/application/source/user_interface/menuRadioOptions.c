@@ -32,6 +32,7 @@
 #include "interfaces/wdog.h"
 #include "utils.h"
 #include "functions/rxPowerSaving.h"
+#include "functions/dmrPrivacy.h"
 
 static void updateScreen(bool isFirstRun);
 static void handleEvent(uiEvent_t *ev);
@@ -61,8 +62,92 @@ enum
 #if defined(PLATFORM_MDUV380) && !defined(PLATFORM_VARIANT_UV380_PLUS_10W)
 	RADIO_OPTIONS_MENU_FORCE_10W,
 #endif
+#if defined(HAS_DMR_PRIVACY)
+	RADIO_OPTIONS_MENU_PRIVACY_TYPE,
+	RADIO_OPTIONS_MENU_PRIVACY_CONTACT,
+	RADIO_OPTIONS_MENU_PRIVACY_KEY,
+#endif
 	NUM_RADIO_OPTIONS_MENU_ITEMS
 };
+
+#if defined(HAS_DMR_PRIVACY)
+static dmrPrivacyType_t privacyType(void)
+{
+	return (dmrPrivacyType_t)DMR_PRIVACY_SETTING_TYPE(nonVolatileSettings.dmrPrivacyType);
+}
+
+static int privacyContact(void)
+{
+	return DMR_PRIVACY_SETTING_CONTACT(nonVolatileSettings.dmrPrivacyType);
+}
+
+static void privacySet(dmrPrivacyType_t type, int contact)
+{
+	settingsSet(nonVolatileSettings.dmrPrivacyType, DMR_PRIVACY_SETTING(type, contact));
+}
+
+// Step through the private call contacts, with "none" (0) between the last and the first
+static void privacyContactStep(int step)
+{
+	CodeplugContact_t contact;
+	int count = codeplugContactsGetCount(CONTACT_CALLTYPE_PC);
+	int position = 0;
+
+	for (int n = 1; n <= count; n++)
+	{
+		if (codeplugContactGetDataForNumberInType(n, CONTACT_CALLTYPE_PC, &contact) == privacyContact())
+		{
+			position = n;
+			break;
+		}
+	}
+
+	position = (position + step + count + 1) % (count + 1);
+	privacySet(privacyType(), ((position == 0) ? 0 : codeplugContactGetDataForNumberInType(position, CONTACT_CALLTYPE_PC, &contact)));
+}
+
+// Step the privacy key through the scheme's range, wrapping around
+static void privacyKeyStep(int step)
+{
+	dmrPrivacyType_t type = privacyType();
+	int max = dmrPrivacyKeyMax(type);
+	int min = (type == DMR_PRIVACY_MOTOROLA_BP) ? 1 : 0;
+	int key = nonVolatileSettings.dmrPrivacyKey + step;
+
+	if (key > max)
+	{
+		key = min;
+	}
+	else if (key < min)
+	{
+		key = ((step < 0) ? max : min);
+	}
+
+	settingsSet(nonVolatileSettings.dmrPrivacyKey, (uint16_t)key);
+}
+
+// A digit typed on the key: decimal for Motorola BP (1-255), a hex nibble shifted in for Anytone
+static void privacyKeyDigit(int digit)
+{
+	uint16_t key = nonVolatileSettings.dmrPrivacyKey;
+
+	if (privacyType() == DMR_PRIVACY_ANYTONE_BP)
+	{
+		key = (key << 4) | digit;
+	}
+	else
+	{
+		key = (key * 10) + digit;
+
+		if (key > 255)
+		{
+			key = digit;
+		}
+	}
+
+	settingsSet(nonVolatileSettings.dmrPrivacyKey, key);
+}
+#endif
 
 menuStatus_t menuRadioOptions(uiEvent_t *ev, bool isFirstRun)
 {
@@ -107,6 +192,7 @@ static void updateScreen(bool isFirstRun)
 	int mNum = 0;
 	char buf[SCREEN_LINE_BUFFER_SIZE];
 	const char *leftSide = NULL;// initialize to please the compiler
+	bool leftSideIsText = false;// leftSide is plain text rather than a language string
 	const char *rightSideConst = NULL;// initialize to please the compiler
 	char rightSideVar[SCREEN_LINE_BUFFER_SIZE];
 	voicePrompt_t rightSideUnitsPrompt;
@@ -132,6 +218,7 @@ static void updateScreen(bool isFirstRun)
 			buf[0] = 0;
 			buf[2] = 0;
 			leftSide = NULL;
+			leftSideIsText = false;
 			rightSideConst = NULL;
 			rightSideVar[0] = 0;
 			rightSideUnitsPrompt = PROMPT_SILENCE;// use PROMPT_SILENCE as flag that the unit has not been set
@@ -227,6 +314,35 @@ static void updateScreen(bool isFirstRun)
 					rightSideUnitsStr = "W";
 					break;
 #endif
+#if defined(HAS_DMR_PRIVACY)
+				case RADIO_OPTIONS_MENU_PRIVACY_TYPE:
+					leftSide = "Privacy";
+					leftSideIsText = true;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%s", dmrPrivacyTypeName(privacyType()));
+					break;
+				case RADIO_OPTIONS_MENU_PRIVACY_CONTACT: // only private calls with this contact are encrypted
+					leftSide = "Contact";
+					leftSideIsText = true;
+					{
+						CodeplugContact_t contact;
+
+						if ((privacyContact() != 0) && codeplugContactGetDataForIndex(privacyContact(), &contact) && (contact.callType == CONTACT_CALLTYPE_PC))
+						{
+							codeplugUtilConvertBufToString(contact.name, rightSideVar, 16);
+						}
+						else
+						{
+							rightSideConst = currentLanguage->none;
+						}
+					}
+					break;
+				case RADIO_OPTIONS_MENU_PRIVACY_KEY:
+					leftSide = "Key";
+					leftSideIsText = true;
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE,
+							((privacyType() == DMR_PRIVACY_ANYTONE_BP) ? "%04X" : "%u"), nonVolatileSettings.dmrPrivacyKey);
+					break;
+#endif
 			}
 
 			snprintf(buf, SCREEN_LINE_BUFFER_SIZE, "%s:%s", leftSide, (rightSideVar[0] ? rightSideVar : (rightSideConst ? rightSideConst : "")));
@@ -242,7 +358,14 @@ static void updateScreen(bool isFirstRun)
 
 				if (!wasPlaying || (menuDataGlobal.newOptionSelected || (menuDataGlobal.menuOptionsTimeout > 0)))
 				{
-					voicePromptsAppendLanguageString(leftSide);
+					if (leftSideIsText)
+					{
+						voicePromptsAppendString((char *)leftSide);// not a language string
+					}
+					else
+					{
+						voicePromptsAppendLanguageString(leftSide);
+					}
 				}
 
 				if ((rightSideVar[0] != 0) || ((rightSideVar[0] == 0) && (rightSideConst == NULL)))
@@ -487,6 +610,21 @@ static void handleEvent(uiEvent_t *ev)
 					}
 					break;
 #endif
+#if defined(HAS_DMR_PRIVACY)
+				case RADIO_OPTIONS_MENU_PRIVACY_TYPE:
+					if (privacyType() < (DMR_PRIVACY_NUM_TYPES - 1))
+					{
+						privacySet(privacyType() + 1, privacyContact());
+						privacyKeyStep(0);
+					}
+					break;
+				case RADIO_OPTIONS_MENU_PRIVACY_CONTACT:
+					privacyContactStep(1);
+					break;
+				case RADIO_OPTIONS_MENU_PRIVACY_KEY:
+					privacyKeyStep(BUTTONCHECK_DOWN(ev, BUTTON_SK2) ? 16 : 1);
+					break;
+#endif
 			}
 		}
 		else if (KEYCHECK_PRESS(ev->keys, KEY_LEFT)
@@ -599,8 +737,32 @@ static void handleEvent(uiEvent_t *ev)
 					}
 					break;
 #endif
+#if defined(HAS_DMR_PRIVACY)
+				case RADIO_OPTIONS_MENU_PRIVACY_TYPE:
+					if (privacyType() > DMR_PRIVACY_OFF)
+					{
+						privacySet(privacyType() - 1, privacyContact());
+						privacyKeyStep(0);
+					}
+					break;
+				case RADIO_OPTIONS_MENU_PRIVACY_CONTACT:
+					privacyContactStep(-1);
+					break;
+				case RADIO_OPTIONS_MENU_PRIVACY_KEY:
+					privacyKeyStep(BUTTONCHECK_DOWN(ev, BUTTON_SK2) ? -16 : -1);
+					break;
+#endif
 			}
 		}
+#if defined(HAS_DMR_PRIVACY)
+		else if (KEYCHECK_SHORTUP_NUMBER(ev->keys) && (BUTTONCHECK_DOWN(ev, BUTTON_SK2) == 0) &&
+				(menuDataGlobal.currentItemIndex == RADIO_OPTIONS_MENU_PRIVACY_KEY))
+		{
+			isDirty = true;
+			menuDataGlobal.newOptionSelected = false;
+			privacyKeyDigit(ev->keys.key - '0');
+		}
+#endif
 		else if ((ev->keys.event & KEY_MOD_PRESS) && (menuDataGlobal.menuOptionsTimeout > 0))
 		{
 			menuDataGlobal.menuOptionsTimeout = 0;
