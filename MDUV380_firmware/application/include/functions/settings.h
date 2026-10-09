@@ -153,7 +153,11 @@ typedef enum
 	BIT_VISUAL_VOLUME               = (SETTINGS_BITS_BANK_0 | (1 << 18)),
 #endif
 	BIT_SECONDARY_LANGUAGE          = (SETTINGS_BITS_BANK_0 | (1 << 19)),
+#if defined(HAS_SOFT_VOLUME)
+	BIT_CALL_ALERT_LOUD             = (SETTINGS_BITS_BANK_0 | (1 << 20)),// a received call alert rings even with the volume down
+#else
 	BIT_UNUSED_3                    = (SETTINGS_BITS_BANK_0 | (1 << 20)),
+#endif
 	BIT_DISPLAY_CHANNEL_DISTANCE    = (SETTINGS_BITS_BANK_0 | (1 << 21)),
 #if defined(PLATFORM_MD2017)
 	BIT_TRACKBALL_ENABLED           = (SETTINGS_BITS_BANK_0 | (1 << 22)),

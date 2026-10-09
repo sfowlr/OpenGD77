@@ -28,7 +28,10 @@ typedef struct
 {
 	uint32_t src;
 	uint32_t dst;
+	uint32_t receivedAt;					// ticksGetMillis()
 	bool     group;
+	bool     hostPending;					// not popped by the USB host yet
+	bool     unread;						// not shown on the radio yet
 	char     text[sizeof(((dmrDataTMS_t *)0)->text)];
 } dmrDataMessage_t;
 
@@ -39,8 +42,15 @@ bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count);
 bool dmrDataServiceIsBusy(void);
 void dmrDataServiceTick(void);
 
-int dmrDataServiceInboxCount(void);
+// Main task context, for each text message received (a weak no-op unless the platform's UI has one)
+void dmrDataServiceMessageReceived(const dmrDataMessage_t *message);
+
+// The inbox: the last DMR_DATA_INBOX_SIZE messages, shared by the USB host (which pops the oldest it hasn't had yet)
+// and the radio's UI (which reads them all, newest first, and marks them read). A new message replaces the oldest
+int dmrDataServiceInboxCount(void);// messages the USB host hasn't popped
 bool dmrDataServiceInboxPop(dmrDataMessage_t *message);
+int dmrDataServiceMessageCount(void);
+dmrDataMessage_t *dmrDataServiceMessage(int index);// 0: the newest
 
 // Raw received bursts kept for the host (USB 'D' commands)
 // The TX burst list (DMR_DATA_MAX_BURSTS), lent to the hotspot: the service never transmits in hotspot mode

@@ -90,6 +90,7 @@ menuDataGlobal_t menuDataGlobal =
 #if !defined(PLATFORM_GD77S)
 				NULL,// APRS options
 #endif
+				NULL,// Messages
 				// *** Add new menus to be accessed using quickkey (ID: 0..31) above this line ***
 				NULL,// MessageBox
 				NULL,// hotspot mode
@@ -148,6 +149,7 @@ static menuFunctionData_t menuFunctions[] =
 #if !defined(PLATFORM_GD77S)
 		{ menuAPRSOptions,          NULL, NULL, 0 },
 #endif
+		{ uiMessages,               NULL, NULL, 0 },
 		// *** Add new menus to be accessed using quickkey (ID: 0..31) above this line ***
 		{ uiMessageBox,             NULL, NULL, 0 },
 		{ menuHotspotMode,          NULL, NULL, 0 },
@@ -654,6 +656,7 @@ const menuItemNewData_t mainMenuItems[] =
 	{   8, MENU_FIRMWARE_INFO   },
 	{   9, MENU_OPTIONS         },
 	{   7, MENU_LAST_HEARD      },
+	{ MENU_STRING_MESSAGES, MENU_MESSAGES },
 	{ 150, MENU_RADIO_INFOS     },
 	{ 173, MENU_SATELLITE       },
 #if defined(HAS_GPS)

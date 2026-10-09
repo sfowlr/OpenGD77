@@ -77,6 +77,9 @@ enum
 #if defined(PLATFORM_MD9600)
 	OPTIONS_SPEAKER_CLICK_SUPPRESS,
 #endif
+#if defined(HAS_SOFT_VOLUME)
+	OPTIONS_CALL_ALERT_LOUD,
+#endif
 	NUM_SOUND_MENU_ITEMS
 };
 
@@ -279,6 +282,12 @@ static void updateScreen(bool isFirstRun)
 					rightSideConst = (settingsIsOptionBitSet(BIT_SPEAKER_CLICK_SUPPRESS) ? currentLanguage->on : currentLanguage->off);
 					break;
 #endif
+#if defined(HAS_SOFT_VOLUME)
+				case OPTIONS_CALL_ALERT_LOUD:
+					leftSide = "Call alert";// Loud: rings even with the volume down
+					snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%s", (settingsIsOptionBitSet(BIT_CALL_ALERT_LOUD) ? "Loud" : "Normal"));
+					break;
+#endif
 			}
 
 			snprintf(buf, SCREEN_LINE_BUFFER_SIZE, "%s:%s", leftSide, (rightSideVar[0] ? rightSideVar : (rightSideConst ? rightSideConst : "")));
@@ -294,7 +303,16 @@ static void updateScreen(bool isFirstRun)
 
 				if (!wasPlaying || (menuDataGlobal.newOptionSelected || (menuDataGlobal.menuOptionsTimeout > 0)))
 				{
-					voicePromptsAppendLanguageString(leftSide);
+#if defined(HAS_SOFT_VOLUME)
+					if (mNum == OPTIONS_CALL_ALERT_LOUD)
+					{
+						voicePromptsAppendString(leftSide);// not a language string
+					}
+					else
+#endif
+					{
+						voicePromptsAppendLanguageString(leftSide);
+					}
 				}
 
 				if ((rightSideVar[0] != 0) || ((rightSideVar[0] == 0) && (rightSideConst == NULL)))
@@ -540,6 +558,11 @@ static void handleEvent(uiEvent_t *ev)
 					settingsSetOptionBit(BIT_SPEAKER_CLICK_SUPPRESS, true);
 					break;
 #endif
+#if defined(HAS_SOFT_VOLUME)
+				case OPTIONS_CALL_ALERT_LOUD:
+					settingsSetOptionBit(BIT_CALL_ALERT_LOUD, true);
+					break;
+#endif
 			}
 		}
 		else if (KEYCHECK_PRESS(ev->keys, KEY_LEFT)
@@ -668,6 +691,11 @@ static void handleEvent(uiEvent_t *ev)
 #if defined(PLATFORM_MD9600)
 				case OPTIONS_SPEAKER_CLICK_SUPPRESS:
 					settingsSetOptionBit(BIT_SPEAKER_CLICK_SUPPRESS, false);
+					break;
+#endif
+#if defined(HAS_SOFT_VOLUME)
+				case OPTIONS_CALL_ALERT_LOUD:
+					settingsSetOptionBit(BIT_CALL_ALERT_LOUD, false);
 					break;
 #endif
 			}

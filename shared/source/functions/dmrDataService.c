@@ -16,6 +16,7 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <stdio.h>
 #include <string.h>
 #include "functions/dmrDataService.h"
 #include "hardware/HR-C6000.h"
@@ -29,13 +30,24 @@
 #include "usb/usb_ncm.h"
 #include "functions/ipGateway.h"
 #include "functions/codeplug.h"
+#include "user_interface/menuSystem.h"
+#include "user_interface/uiUtilities.h"
 
 #define MILLIS()				ticksGetMillis()
 #define CHANNEL_IS_RX_ONLY()	(codeplugChannelGetFlag(currentChannelData, CHANNEL_FLAG_RX_ONLY) != 0)
 
 #define RX_BURST_QUEUE_SIZE		8
 #define USB_BUFFER_SIZE			300
-#define START_TIMEOUT_MS		5000
+#define START_TIMEOUT_MS		10000	// a transmission still waiting for a clear channel after this is dropped
+#define REPLY_TIMEOUT_MS		3000	// the same for an ACK or CSBK answer: later than this the sender has given up
+#define REPLY_HOLDOFF_MS		180		// through a repeater: our slot quiet this long means the sender has finished
+#define LBT_CLEAR_MS			120		// direct mode: nothing heard for this long before transmitting (listen before talk). A
+												// radio sends a burst every 60 ms, so this is at least one frame with none
+#define CALL_ALERT_REPEAT_MS	10000	// the caller retries until it hears the ack: ring once
+#define CALL_ALERT_SHOW_MS		10000
+#if defined(HAS_SOFT_VOLUME)
+#define CALL_ALERT_LOUD_GAIN	16		// HR-C6000 line out gain while the alert rings with BIT_CALL_ALERT_LOUD (knob: -31..31)
+#endif
 
 // USB 'D' sub commands
 enum
@@ -60,21 +72,45 @@ DMR_DATA_BUFFER static dmrBurst_t txBursts[DMR_DATA_MAX_BURSTS];
 static int txBurstCount = 0;
 static volatile bool txPending = false;
 static uint32_t txPendingSince;
+static bool txIsReply;
 
 static uint8_t smsSeq = 0;
-// Replies to a received message: the ETSI response for confirmed data and / or the TMS ACK, sent in one transmission
+// Replies to a received message: the ETSI response for confirmed data, then the TMS ACK in a transmission of its own,
+// as MOTOTRBO radios send it (a repeater or hotspot takes one transmission for one data call)
 static volatile bool ackPending = false;
 static uint32_t ackDst;
 static bool ackResponse;
 static uint8_t ackSap;
 static uint8_t ackSendSeq;
 static bool ackTMS;
-static uint8_t ackSeqByte;
+static uint8_t ackSeq;
+static bool tmsAckPending = false;
+static uint32_t tmsAckDst;
+static uint8_t tmsAckSeq;
 static volatile bool newMessage = false;
 
+// Call alert ack or radio check answer, sent on its own
+static volatile bool csbkAnswerPending = false;
+static dmrBurst_t csbkAnswer;
+static volatile uint32_t lastRxBurstTime;
+static uint32_t channelBusyTime;
+static volatile bool callAlertPending = false;
+static uint32_t callAlertSrc;
+static uint32_t lastCallAlertSrc = 0;
+static uint32_t lastCallAlertTime;
+#if defined(HAS_SOFT_VOLUME)
+static bool callAlertGainRaised = false;
+#endif
+
+// Ring twice, like a phone
+static const int16_t MELODY_CALL_ALERT[] = {
+		1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 0, 400,
+		1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50,
+		-1, -1 };
+
 DMR_DATA_BUFFER static dmrDataMessage_t inbox[DMR_DATA_INBOX_SIZE];
-static volatile uint8_t inboxWriteIdx = 0;
-static volatile uint8_t inboxReadIdx = 0;
+static volatile uint8_t inboxNewest = 0;
+static volatile uint8_t inboxUsed = 0;
 
 static dmrBurst_t rxBursts[RX_BURST_QUEUE_SIZE];
 static volatile uint8_t rxBurstWriteIdx = 0;
@@ -123,8 +159,19 @@ static bool queueTx(int count)
 
 	txBurstCount = count;
 	txPendingSince = MILLIS();
+	channelBusyTime = txPendingSince;// listen for LBT_CLEAR_MS at least
+	txIsReply = false;
 	txPending = true;
 	return true;
+}
+
+// ACKs and CSBK answers: sent in the repeater's hang time, and only worth sending for REPLY_TIMEOUT_MS
+static void queueReply(int count)
+{
+	if (queueTx(count))
+	{
+		txIsReply = true;
+	}
 }
 
 static bool sendSMS(bool group, uint32_t dst, const char *text, bool ackRequested, uint8_t blockType)
@@ -169,33 +216,124 @@ bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count)
 	return queueTx(count);
 }
 
+static void showCallAlert(uint32_t src)
+{
+	char name[MAX_DMR_ID_CONTACT_TEXT_LENGTH];
+	char message[NOTIFICATION_MESSAGE_LEN_MAX];
+
+	if (!contactIDLookup(src, CONTACT_CALLTYPE_PC, name))
+	{
+		dmrIdDataStruct_t record;
+
+		dmrIDLookup(src, &record);// "ID:n" when it isn't in the database
+		snprintf(name, sizeof(name), "%s", record.text);
+	}
+	snprintf(message, sizeof(message), "Call alert\n%s", name);
+
+	displayLightTrigger(true);
+	uiNotificationShow(NOTIFICATION_TYPE_MESSAGE, NOTIFICATION_ID_MESSAGE, CALL_ALERT_SHOW_MS, message, true);
+
+#if defined(HAS_SOFT_VOLUME)
+	// The volume knob only sets the HR-C6000 line out gain, which the beeps go through as well
+	if (settingsIsOptionBitSet(BIT_CALL_ALERT_LOUD) && (lastVolume < CALL_ALERT_LOUD_GAIN))
+	{
+		HRC6000SetDmrRxGain(CALL_ALERT_LOUD_GAIN);
+		callAlertGainRaised = true;
+	}
+#endif
+	soundSetMelody(MELODY_CALL_ALERT);
+}
+
+// Listen before talk, for everything the service transmits. Direct mode: no voice call (its terminator clears the ID),
+// and for LBT_CLEAR_MS no data burst and no carrier, decodable or not. The HR-C6000 slot state isn't used: without a
+// terminator (data, CSBKs) it only goes idle on the voice fade timeout, 200-400 ms after the last burst. A repeater's
+// outbound carrier stays up through its hang time, so there: our slot has had no data bursts for REPLY_HOLDOFF_MS, and
+// unless this is a reply (expected in the hang time), no call is going on on our slot. The caller's ID is only cleared
+// when the repeater stops, so new traffic waits for the hang time to end
+static bool channelIsClear(bool isReply)
+{
+#if defined(STM32F405xx)
+	if (currentRadioDevice->trxDMRModeRx == DMR_MODE_RMO)
+#else
+	if (trxDMRModeRx == DMR_MODE_RMO)
+#endif
+	{
+		return ((MILLIS() - lastRxBurstTime) > REPLY_HOLDOFF_MS) && (isReply || (HRC6000GetReceivedSrcId() == 0));
+	}
+
+	if ((HRC6000GetReceivedSrcId() != 0) || ((MILLIS() - lastRxBurstTime) < LBT_CLEAR_MS) ||
+#if defined(STM32F405xx)
+			trxCarrierDetected(RADIO_DEVICE_PRIMARY))
+#else
+			trxCarrierDetected())
+#endif
+	{
+		channelBusyTime = MILLIS();
+		return false;
+	}
+
+	return ((MILLIS() - channelBusyTime) > LBT_CLEAR_MS);
+}
+
 void dmrDataServiceTick(void)
 {
+	if (csbkAnswerPending && !dmrDataServiceIsBusy() && canTransmit())
+	{
+		txBursts[0] = csbkAnswer;
+		csbkAnswerPending = false;
+		queueReply(1);
+	}
+
+	if (callAlertPending)
+	{
+		callAlertPending = false;
+		if ((callAlertSrc != lastCallAlertSrc) || ((MILLIS() - lastCallAlertTime) > CALL_ALERT_REPEAT_MS))
+		{
+			showCallAlert(callAlertSrc);
+		}
+		lastCallAlertSrc = callAlertSrc;
+		lastCallAlertTime = MILLIS();
+	}
+
+#if defined(HAS_SOFT_VOLUME)
+	if (callAlertGainRaised && !soundMelodyIsPlaying())
+	{
+		callAlertGainRaised = false;
+		HRC6000SetDmrRxGain(lastVolume);
+	}
+#endif
+
 	if (ackPending && !dmrDataServiceIsBusy() && canTransmit())
 	{
-		int n = 0;
-
 		ackPending = false;
-		if (ackResponse)
-		{
-			n = dmrDataBuildResponseAck(ackSap, ackDst, trxDMRID, ackSendSeq, txBursts);
-		}
 		if (ackTMS)
 		{
-			n += dmrDataBuildTMSAck(ackDst, trxDMRID, ackSeqByte, &txBursts[n], DMR_DATA_MAX_BURSTS - n);
+			tmsAckDst = ackDst;
+			tmsAckSeq = ackSeq;
+			tmsAckPending = true;
 		}
-		queueTx(n);
+		if (ackResponse)
+		{
+			queueReply(dmrDataBuildResponseAck(ackSap, ackDst, trxDMRID, ackSendSeq, txBursts));
+		}
+	}
+
+	// After the response has gone (the service is busy until then)
+	if (tmsAckPending && !dmrDataServiceIsBusy() && canTransmit())
+	{
+		tmsAckPending = false;
+		queueReply(dmrDataBuildTMSAck(tmsAckDst, trxDMRID, tmsAckSeq, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
 	}
 
 	if (txPending)
 	{
 		rxPowerSavingSetState(ECOPHASE_POWERSAVE_INACTIVE);
 
-		if (HRC6000DataTxStart(txBursts, txBurstCount))
+		if (channelIsClear(txIsReply) && HRC6000DataTxStart(txBursts, txBurstCount))
 		{
 			txPending = false;
 		}
-		else if ((MILLIS() - txPendingSince) > START_TIMEOUT_MS)
+		else if ((MILLIS() - txPendingSince) > (txIsReply ? REPLY_TIMEOUT_MS : START_TIMEOUT_MS))
 		{
 			txPending = false;
 		}
@@ -205,6 +343,7 @@ void dmrDataServiceTick(void)
 	{
 		newMessage = false;
 		soundSetMelody(MELODY_PRIVATE_CALL);
+		dmrDataServiceMessageReceived(dmrDataServiceMessage(0));
 	}
 
 	while (monitorReadIdx != monitorWriteIdx)
@@ -361,7 +500,7 @@ static void handlePacket(const dmrDataPacket_t *packet)
 	if (isTMS && tms.ackRequested && !packet->group)
 	{
 		ackTMS = true;
-		ackSeqByte = tms.seqByte;
+		ackSeq = tms.seq;
 	}
 
 	if (ackResponse || ackTMS)
@@ -374,24 +513,51 @@ static void handlePacket(const dmrDataPacket_t *packet)
 		return;
 	}
 
-	uint8_t next = (inboxWriteIdx + 1) % DMR_DATA_INBOX_SIZE;
-	if (next == inboxReadIdx)
-	{
-		inboxReadIdx = (inboxReadIdx + 1) % DMR_DATA_INBOX_SIZE;// drop the oldest
-	}
-
-	dmrDataMessage_t *message = &inbox[inboxWriteIdx];
+	uint8_t next = (inboxUsed == 0) ? 0 : ((inboxNewest + 1) % DMR_DATA_INBOX_SIZE);// replaces the oldest when full
+	dmrDataMessage_t *message = &inbox[next];
 	message->src = packet->src;
 	message->dst = packet->dst;
 	message->group = packet->group;
+	message->receivedAt = MILLIS();
+	message->hostPending = true;
+	message->unread = true;
 	memcpy(message->text, tms.text, sizeof(message->text));
-	inboxWriteIdx = next;
+	inboxNewest = next;
+	if (inboxUsed < DMR_DATA_INBOX_SIZE)
+	{
+		inboxUsed++;
+	}
 	newMessage = true;
+}
+
+// Main task context: a text message to us has arrived. The platform's UI shows it (see uiMessages.c)
+__attribute__((weak)) void dmrDataServiceMessageReceived(const dmrDataMessage_t *message)
+{
+	(void)message;
+}
+
+// Call alert and radio check to us: answered, and a call alert rings
+static void handleCSBK(const uint8_t *csbk)
+{
+	if (csbkAnswerPending || (dmrDataBuildCSBKAnswer(csbk, trxDMRID, &csbkAnswer) == 0))
+	{
+		return;
+	}
+
+	csbkAnswerPending = true;
+
+	if (((csbk[0] & 0x3F) == DMR_CSBKO_CALL_ALERT) && !callAlertPending)
+	{
+		callAlertSrc = (csbk[7] << 16) | (csbk[8] << 8) | csbk[9];
+		callAlertPending = true;
+	}
 }
 
 // HR-C6000 task context
 void dmrDataServiceRxBurst(const dmrBurst_t *burst)
 {
+	lastRxBurstTime = MILLIS();// through a repeater, holds our transmissions back until the sender has finished
+
 	uint8_t next = (rxBurstWriteIdx + 1) % RX_BURST_QUEUE_SIZE;
 
 	if (next == rxBurstReadIdx)
@@ -417,27 +583,68 @@ void dmrDataServiceRxBurst(const dmrBurst_t *burst)
 	}
 
 	// In hotspot mode MMDVMHost gets the bursts (see hotspotDataTick), the radio itself is not the recipient
-	if ((settingsUsbMode != USB_MODE_HOTSPOT) && (dmrDataRxBurst(burst) == DMR_DATA_RX_PACKET))
+	if (settingsUsbMode != USB_MODE_HOTSPOT)
 	{
-		handlePacket(&dmrDataRxPacket);
+		switch (dmrDataRxBurst(burst))
+		{
+			case DMR_DATA_RX_PACKET:
+				handlePacket(&dmrDataRxPacket);
+				break;
+			case DMR_DATA_RX_CSBK:
+				handleCSBK(burst->payload);
+				break;
+			default:
+				break;
+		}
 	}
+}
+
+int dmrDataServiceMessageCount(void)
+{
+	return inboxUsed;
+}
+
+dmrDataMessage_t *dmrDataServiceMessage(int index)
+{
+	if ((index < 0) || (index >= inboxUsed))
+	{
+		return NULL;
+	}
+
+	return &inbox[(inboxNewest + DMR_DATA_INBOX_SIZE - index) % DMR_DATA_INBOX_SIZE];
 }
 
 int dmrDataServiceInboxCount(void)
 {
-	return (inboxWriteIdx + DMR_DATA_INBOX_SIZE - inboxReadIdx) % DMR_DATA_INBOX_SIZE;
-}
+	int count = 0;
 
-bool dmrDataServiceInboxPop(dmrDataMessage_t *message)
-{
-	if (inboxReadIdx == inboxWriteIdx)
+	for (int i = 0; i < inboxUsed; i++)
 	{
-		return false;
+		if (dmrDataServiceMessage(i)->hostPending)
+		{
+			count++;
+		}
 	}
 
-	*message = inbox[inboxReadIdx];
-	inboxReadIdx = (inboxReadIdx + 1) % DMR_DATA_INBOX_SIZE;
-	return true;
+	return count;
+}
+
+// The oldest message the host hasn't had
+bool dmrDataServiceInboxPop(dmrDataMessage_t *message)
+{
+	for (int i = inboxUsed - 1; i >= 0; i--)
+	{
+		dmrDataMessage_t *m = dmrDataServiceMessage(i);
+
+		if (m->hostPending)
+		{
+			m->hostPending = false;
+			*message = *m;
+			return true;
+		}
+	}
+
+	return false;
 }
 
 dmrBurst_t *dmrDataServiceTxBursts(void)

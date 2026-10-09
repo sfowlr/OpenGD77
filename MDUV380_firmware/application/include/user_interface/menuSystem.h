@@ -159,9 +159,12 @@ typedef struct
 
 typedef struct
 {
-	const int 				stringOffset; // String offset in stringsTable_t
+	const int 				stringOffset; // String offset in stringsTable_t, or MENU_STRING_MESSAGES
 	const int 				menuNum;
 } menuItemNewData_t;
+
+// stringOffset of an entry whose label isn't translated: the Messages screen's, with its unread count
+#define MENU_STRING_MESSAGES	(-2)
 
 typedef struct
 {
@@ -320,6 +323,7 @@ enum MENU_SCREENS
 #if !defined(PLATFORM_GD77S)
 	MENU_APRS,
 #endif
+	MENU_MESSAGES,// received text messages (after the others, so the quickkey IDs saved in the settings stay put)
 	// *** Add new menus to be accessed using quickkey (ID: 0..31) above this line ***
 	UI_MESSAGE_BOX,
 	UI_HOTSPOT_MODE,
@@ -453,6 +457,9 @@ menuStatus_t menuNumericalEntry(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuTxScreen(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuRSSIScreen(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuLastHeard(uiEvent_t *event, bool isFirstRun);
+menuStatus_t uiMessages(uiEvent_t *event, bool isFirstRun);
+int uiMessagesUnreadCount(void);
+const char *uiMessagesMenuLabel(void);
 menuStatus_t menuGeneralOptions(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuRadioOptions(uiEvent_t *event, bool isFirstRun);
 menuStatus_t menuDisplayOptions(uiEvent_t *event, bool isFirstRun);

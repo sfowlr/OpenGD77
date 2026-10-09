@@ -78,7 +78,14 @@ typedef struct
 #define DMR_SAP_PROPRIETARY			0x09
 #define DMR_SAP_SHORT_DATA			0x0A
 
+#define DMR_CSBKO_CALL_ALERT		0x1F
+#define DMR_CSBKO_CALL_ALERT_ACK	0x20
+#define DMR_CSBKO_RADIO_CHECK		0x24		// byte 3 0x80: request, else the answer
 #define DMR_CSBKO_PREAMBLE			0x3D
+
+// Feature set IDs whose call alert and radio check CSBKs are answered
+#define DMR_FID_ETSI				0x00
+#define DMR_FID_MOTOROLA			0x10
 
 // IP protocols
 #define DMR_IP_PROTO_ICMP			1
@@ -119,6 +126,9 @@ uint32_t dmrDataCRC32(const uint8_t *data, int length);
 
 // TX builders. Each returns the number of bursts written to out, or 0 if the data does not fit
 int dmrDataBuildCSBK(const uint8_t csbk[10], dmrBurst_t *out);
+// The answer from us (ID src) to a received CSBK (its 10 bytes, CRC checked): the ack of a call alert, or the
+// answer to a radio check. 0 if the CSBK isn't one of those, or isn't addressed to us
+int dmrDataBuildCSBKAnswer(const uint8_t *csbk, uint32_t src, dmrBurst_t *out);
 // blockType: DT_RATE_12_DATA, DT_RATE_34_DATA or DT_RATE_1_DATA
 int dmrDataBlockLength(uint8_t blockType);
 int dmrDataBuildPacket(uint8_t dpf, uint8_t sap, bool group, uint32_t dst, uint32_t src,
@@ -131,7 +141,8 @@ int dmrDataBuildIP(bool group, uint32_t dst, uint32_t src, uint8_t protocol, con
 int dmrDataBuildTMS(bool group, uint32_t dst, uint32_t src, const char *text, uint8_t seq, bool ackRequested,
 						uint8_t blockType, int preambles, dmrBurst_t *out, int maxBursts);
 int dmrDataBuildResponseAck(uint8_t sap, uint32_t dst, uint32_t src, uint8_t sendSeq, dmrBurst_t *out);
-int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *out, int maxBursts);
+// seq: the 7 bit sequence number of the message being acknowledged
+int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seq, int preambles, dmrBurst_t *out, int maxBursts);
 
 // RX
 void dmrDataRxReset(void);
@@ -162,7 +173,7 @@ typedef struct
 {
 	bool    isAck;
 	bool    ackRequested;
-	uint8_t seqByte;
+	uint8_t seq;							// 7 bit sequence number
 	char    text[160];
 } dmrDataTMS_t;
 

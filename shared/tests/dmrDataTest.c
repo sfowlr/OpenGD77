@@ -106,7 +106,7 @@ static void testTMSRoundTrip(bool group, int preambles)
 	dmrDataTMS_t tms;
 	CHECK(dmrDataDecodeTMS(udp.payload, udp.length, &tms));
 	CHECK(!tms.isAck);
-	CHECK(tms.seqByte == (0x80 | 5));
+	CHECK(tms.seq == 5);
 	CHECK(strcmp(tms.text, text) == 0);
 
 	// A corrupted block must fail the packet CRC
@@ -250,7 +250,7 @@ static void testRawPacket(void)
 static void testTMSAck(void)
 {
 	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
-	int n = dmrDataBuildTMSAck(3141592, 235, 0x85, bursts, DMR_DATA_MAX_BURSTS);
+	int n = dmrDataBuildTMSAck(3141592, 235, 5, 0, bursts, DMR_DATA_MAX_BURSTS);
 
 	CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
 
@@ -259,7 +259,15 @@ static void testTMSAck(void)
 	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp));
 	CHECK(dmrDataDecodeTMS(udp.payload, udp.length, &tms));
 	CHECK(tms.isAck);
-	CHECK(tms.seqByte == 0x85);
+	CHECK(tms.seq == 5);
+	CHECK((udp.length == 5) && (memcmp(udp.payload, "\x00\x03\x9F\x00\x05", 5) == 0));
+
+	// A sequence number over 31 needs the second octet: the same bytes as the MOTOTRBO capture (s/n 53)
+	n = dmrDataBuildTMSAck(3141592, 235, 53, 2, bursts, DMR_DATA_MAX_BURSTS);
+	CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
+	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp));
+	CHECK((udp.length == 6) && (memcmp(udp.payload, "\x00\x04\x9F\x00\x95\x20", 6) == 0));
+	CHECK(dmrDataDecodeTMS(udp.payload, udp.length, &tms) && tms.isAck && (tms.seq == 53));
 	dumpBursts("tms-ack", bursts, n);
 }
 
@@ -273,11 +281,11 @@ static void testRadioDeskVectors(void)
 	CHECK(dmrDataDecodeTMS(ahoj, sizeof(ahoj), &tms));
 	CHECK(!tms.isAck && tms.ackRequested);
 	CHECK(strcmp(tms.text, "ahoj") == 0);
-	CHECK(tms.seqByte == 0x95);
+	CHECK(tms.seq == 85);// 0x95 0x44: low bits 0x15, bits 5-6 0x40 (with the encoding)
 
 	CHECK(dmrDataDecodeTMS(ack, sizeof(ack), &tms));
 	CHECK(tms.isAck);
-	CHECK(tms.seqByte == 0x95);
+	CHECK(tms.seq == 53);
 
 	// Compressed UDP/IP header, Motorola TMS port id 98
 	static dmrDataPacket_t p;
@@ -304,6 +312,39 @@ static void testCSBK(void)
 	CHECK(dmrDataRxBurst(&burst) == DMR_DATA_RX_ERROR);
 	burst.payload[2] ^= 1;
 	dumpBursts("csbk", &burst, 1);
+}
+
+// Call alert and radio check to 235 from 3141592, and the answers from 235
+static void testCSBKAnswers(void)
+{
+	dmrBurst_t burst;
+	const uint8_t alert[10] = { 0x9F, 0x10, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x2F, 0xEF, 0xD8 };
+	const uint8_t check[10] = { 0xA4, 0x10, 0x00, 0x80, 0x00, 0x00, 0xEB, 0x2F, 0xEF, 0xD8 };
+	const uint8_t ackExpected[10] = { 0xA0, 0x10, 0x00, 0x00, 0x2F, 0xEF, 0xD8, 0x00, 0x00, 0xEB };
+	const uint8_t checkExpected[10] = { 0xA4, 0x10, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x2F, 0xEF, 0xD8 };
+	uint8_t other[10];
+
+	CHECK(dmrDataBuildCSBKAnswer(alert, 235, &burst) == 1);
+	CHECK(burst.dataType == DT_CSBK);
+	CHECK(memcmp(burst.payload, ackExpected, 10) == 0);
+	CHECK(dmrDataRxBurst(&burst) == DMR_DATA_RX_CSBK);// valid CRC
+
+	CHECK(dmrDataBuildCSBKAnswer(check, 235, &burst) == 1);
+	CHECK(memcmp(burst.payload, checkExpected, 10) == 0);
+	dumpBursts("radio check answer", &burst, 1);
+
+	CHECK(dmrDataBuildCSBKAnswer(alert, 236, &burst) == 0);// someone else's
+	CHECK(dmrDataBuildCSBKAnswer(alert, 3141592, &burst) == 0);// our own, from the repeater
+	memcpy(other, check, 10);
+	other[3] = 0x00;
+	CHECK(dmrDataBuildCSBKAnswer(other, 235, &burst) == 0);// an answer isn't answered
+	other[0] = 0xA0;
+	CHECK(dmrDataBuildCSBKAnswer(other, 235, &burst) == 0);// nor an ack
+	memcpy(other, alert, 10);
+	other[1] = 0x68;
+	CHECK(dmrDataBuildCSBKAnswer(other, 235, &burst) == 0);// unknown feature set
+	other[1] = 0x00;
+	CHECK(dmrDataBuildCSBKAnswer(other, 235, &burst) == 1);// ETSI
 }
 
 // Confirmed Rate 1/2 packet as another radio would send it: 10 data bytes per block after the DBSN / CRC-9
@@ -453,6 +494,7 @@ int main(void)
 	testTMSAck();
 	testRadioDeskVectors();
 	testCSBK();
+	testCSBKAnswers();
 	testConfirmedRx();
 	testFrames();
 	testCodedFrames();

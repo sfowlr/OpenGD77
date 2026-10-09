@@ -51,7 +51,8 @@ menuStatus_t menuDisplayMenuList(uiEvent_t *ev, bool isFirstRun)
 			{
 				int lastIndex = menuSystemGetLastItemIndex(menuDataGlobal.controlData.stackPosition - 1);
 
-				if (lastIndex != -1)
+				if ((lastIndex != -1) &&
+						(menuDataGlobal.data[menuDataGlobal.controlData.stack[menuDataGlobal.controlData.stackPosition - 1]]->items[lastIndex].stringOffset >= 0))
 				{
 					menuName = (currentLanguage->LANGUAGE_NAME +
 							(menuDataGlobal.data[menuDataGlobal.controlData.stack[menuDataGlobal.controlData.stackPosition - 1]]->items[lastIndex].stringOffset * LANGUAGE_TEXTS_LENGTH));
@@ -118,7 +119,22 @@ static void updateScreen(bool isFirstRun)
 
 		if (mNum < menuDataGlobal.numItems)
 		{
-			if (menuDataGlobal.currentMenuList[mNum].stringOffset >= 0)
+			if (menuDataGlobal.currentMenuList[mNum].stringOffset == MENU_STRING_MESSAGES)
+			{
+				menuDisplayEntry(i, mNum, uiMessagesMenuLabel(), 0, THEME_ITEM_FG_MENU_ITEM, THEME_ITEM_COLOUR_NONE, THEME_ITEM_BG);
+
+				if (i == 0)
+				{
+					if (!isFirstRun)
+					{
+						voicePromptsInit();
+					}
+
+					voicePromptsAppendString(uiMessagesMenuLabel());// not a language string
+					promptsPlayNotAfterTx();
+				}
+			}
+			else if (menuDataGlobal.currentMenuList[mNum].stringOffset >= 0)
 			{
 				const char *menuName = (currentLanguage->LANGUAGE_NAME + (menuDataGlobal.currentMenuList[mNum].stringOffset * LANGUAGE_TEXTS_LENGTH));
 				menuDisplayEntry(i, mNum, menuName, 0, THEME_ITEM_FG_MENU_ITEM, THEME_ITEM_COLOUR_NONE, THEME_ITEM_BG);

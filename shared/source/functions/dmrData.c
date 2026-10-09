@@ -129,6 +129,40 @@ int dmrDataBuildCSBK(const uint8_t csbk[10], dmrBurst_t *out)
 	return 1;
 }
 
+// Call alert and radio check, as MMDVMHost decodes them: target ID in bytes 4-6, source in 7-9. The radio check
+// answer is the request echoed back with byte 3 cleared, so its first ID is the radio answering
+int dmrDataBuildCSBKAnswer(const uint8_t *csbk, uint32_t src, dmrBurst_t *out)
+{
+	uint8_t opcode = csbk[0] & 0x3F;
+	uint8_t buf[10];
+
+	if (((csbk[1] != DMR_FID_ETSI) && (csbk[1] != DMR_FID_MOTOROLA)) || (getId(&csbk[4]) != src) || (getId(&csbk[7]) == src))
+	{
+		return 0;
+	}
+
+	memcpy(buf, csbk, 10);
+	buf[0] = 0x80;// Last Block, not protected
+
+	if ((opcode == DMR_CSBKO_RADIO_CHECK) && (csbk[3] == 0x80))
+	{
+		buf[0] |= DMR_CSBKO_RADIO_CHECK;
+		buf[3] = 0x00;
+	}
+	else if (opcode == DMR_CSBKO_CALL_ALERT)
+	{
+		buf[0] |= DMR_CSBKO_CALL_ALERT_ACK;
+		memcpy(&buf[4], &csbk[7], 3);// to the caller
+		putId(&buf[7], src);
+	}
+	else
+	{
+		return 0;
+	}
+
+	return dmrDataBuildCSBK(buf, out);
+}
+
 // User data octets in an unconfirmed block of the type, 0 if it isn't a data block type
 int dmrDataBlockLength(uint8_t blockType)
 {
@@ -330,11 +364,24 @@ int dmrDataBuildResponseAck(uint8_t sap, uint32_t dst, uint32_t src, uint8_t sen
 	return 1;
 }
 
-int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seqByte, dmrBurst_t *out, int maxBursts)
+// As a MOTOTRBO radio sends it (ok-dmrlib's capture: 00 04 9F 00 95 20): first header 0x9F (more headers, control,
+// type 0xF), no address, then the sequence number: its low 5 bits, and only when it needs them bits 5-6 in a second
+// octet (extension bit set in the first)
+int dmrDataBuildTMSAck(uint32_t dst, uint32_t src, uint8_t seq, int preambles, dmrBurst_t *out, int maxBursts)
 {
-	uint8_t ack[5] = { 0x00, 0x03, 0xBF, 0x00, seqByte };
+	uint8_t ack[6] = { 0x00, 0x03, 0x9F, 0x00, (seq & 0x1F), 0x00 };
+	int length = 5;
 
-	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, ack, sizeof(ack), DT_RATE_12_DATA, 0, out, maxBursts);
+	seq &= 0x7F;
+	if (seq > 0x1F)
+	{
+		ack[1] = 0x04;
+		ack[4] |= 0x80;
+		ack[5] = seq & 0x60;
+		length = 6;
+	}
+
+	return dmrDataBuildUDP(false, dst, src, DMR_UDP_PORT_TMS, DMR_UDP_PORT_TMS, ack, length, DT_RATE_12_DATA, preambles, out, maxBursts);
 }
 
 void dmrDataRxReset(void)
@@ -600,12 +647,21 @@ bool dmrDataDecodeTMS(const uint8_t *payload, int length, dmrDataTMS_t *tms)
 
 	tms->ackRequested = (h & 0x40) != 0;
 	tms->isAck = (h & 0x1F) == 0x1F;
-	tms->seqByte = 0;
+	tms->seq = 0;
 	tms->text[0] = 0;
+
+	// Sequence number: its low 5 bits, then (extension bit set) bits 5-6 in the octet that also has the encoding
+	if ((h & 0x80) && (idx < end))
+	{
+		tms->seq = payload[idx] & 0x1F;
+		if ((payload[idx] & 0x80) && ((idx + 1) < end))
+		{
+			tms->seq |= payload[idx + 1] & 0x60;
+		}
+	}
 
 	if (tms->isAck)
 	{
-		tms->seqByte = (idx < end) ? payload[idx] : 0;
 		return true;
 	}
 
@@ -616,12 +672,7 @@ bool dmrDataDecodeTMS(const uint8_t *payload, int length, dmrDataTMS_t *tms)
 
 	if (h & 0x80)
 	{
-		// sequence number and encoding octets, each with an extension bit
-		if (idx < end)
-		{
-			tms->seqByte = payload[idx];
-		}
-
+		// skip the sequence number and encoding octets, each with an extension bit
 		while (idx < end)
 		{
 			if ((payload[idx++] & 0x80) == 0)
