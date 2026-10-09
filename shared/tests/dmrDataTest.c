@@ -301,6 +301,37 @@ static void testRadioDeskVectors(void)
 	CHECK(udp.length == sizeof(ahoj));
 }
 
+static void testARS(void)
+{
+	uint8_t pdu[DMR_ARS_MAX_PDU];
+	dmrBurst_t bursts[DMR_DATA_MAX_BURSTS];
+	dmrDataUDP_t udp;
+
+	// RadioDesk's test vector (device ID "11"), and the 12 byte PDU hbnet recognises a MOTOTRBO radio's by (000cf0)
+	CHECK((dmrDataBuildARSRegistration(11, pdu) == 9) && (memcmp(pdu, "\x00\x07\xF0\x20\x02\x31\x31\x00\x00", 9) == 0));
+	int length = dmrDataBuildARSRegistration(3101276, pdu);
+	CHECK((length == 14) && (memcmp(pdu, "\x00\x0C\xF0\x20\x07" "3101276" "\x00\x00", 14) == 0));
+	CHECK(dmrDataDecodeARS(pdu, length) == DMR_ARS_DEVICE_REGISTRATION);
+	CHECK(dmrDataBuildARSRegistration(16776415, pdu) <= DMR_ARS_MAX_PDU);
+
+	CHECK((dmrDataBuildARSDeregistration(pdu) == 3) && (memcmp(pdu, "\x00\x01\x31", 3) == 0));
+	CHECK(dmrDataDecodeARS(pdu, 3) == DMR_ARS_DEVICE_DEREGISTRATION);
+
+	// The server's acknowledgment (hbnet's data gateway sends 00 02 BF 01) and a query
+	CHECK(dmrDataDecodeARS((const uint8_t *)"\x00\x02\xBF\x01", 4) == DMR_ARS_RESPONSE);
+	CHECK(dmrDataDecodeARS((const uint8_t *)"\x00\x01\x34", 3) == DMR_ARS_QUERY);
+	CHECK(dmrDataDecodeARS((const uint8_t *)"\x00\x05\xBF\x01", 4) == -1);// truncated
+	CHECK(dmrDataDecodeARS((const uint8_t *)"\x00\x01\x0F", 3) == -1);// no control bit
+
+	// As it goes on air: UDP 4005 both ways, to the server's individual ID
+	length = dmrDataBuildARSRegistration(3101276, pdu);
+	int n = dmrDataBuildUDP(false, 9990100, 3101276, DMR_UDP_PORT_ARS, DMR_UDP_PORT_ARS, pdu, length, DT_RATE_12_DATA, 2, bursts, DMR_DATA_MAX_BURSTS);
+	CHECK(feed(bursts, n) == DMR_DATA_RX_PACKET);
+	CHECK(!dmrDataRxPacket.group && (dmrDataRxPacket.dst == 9990100) && (dmrDataRxPacket.src == 3101276));
+	CHECK(dmrDataGetUDP(&dmrDataRxPacket, &udp) && (udp.appPort == DMR_UDP_PORT_ARS) && (udp.length == length));
+	dumpBursts("ars-registration", bursts, n);
+}
+
 static void testCSBK(void)
 {
 	dmrBurst_t burst;
@@ -493,6 +524,7 @@ int main(void)
 	testRawPacket();
 	testTMSAck();
 	testRadioDeskVectors();
+	testARS();
 	testCSBK();
 	testCSBKAnswers();
 	testConfirmedRx();

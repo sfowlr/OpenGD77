@@ -67,6 +67,10 @@ enum
 	RADIO_OPTIONS_MENU_PRIVACY_CONTACT,
 	RADIO_OPTIONS_MENU_PRIVACY_KEY,
 #endif
+#if defined(HAS_DMR_ARS)
+	RADIO_OPTIONS_MENU_ARS,
+	RADIO_OPTIONS_MENU_ARS_ID,
+#endif
 	NUM_RADIO_OPTIONS_MENU_ITEMS
 };
 
@@ -149,6 +153,48 @@ static void privacyKeyDigit(int digit)
 }
 #endif
 
+#if defined(HAS_DMR_ARS)
+#define ARS_ID_MAX	16776415 // the top individual ID (0xFFFCDF)
+
+static bool arsIdTyping = false;// a digit typed starts a new ID, the next ones append to it
+
+static void arsIdSet(uint32_t id)
+{
+	settingsSet(nonVolatileSettings.dmrArsId[0], (uint8_t)(id >> 16));
+	settingsSet(nonVolatileSettings.dmrArsId[1], (uint8_t)(id >> 8));
+	settingsSet(nonVolatileSettings.dmrArsId[2], (uint8_t)id);
+}
+
+// Step through the private call contacts' IDs, with "none" (0) between the last and the first. A typed ID that isn't a
+// contact's counts as "none"
+static void arsIdStep(int step)
+{
+	CodeplugContact_t contact;
+	int count = codeplugContactsGetCount(CONTACT_CALLTYPE_PC);
+	int position = 0;
+
+	for (int n = 1; n <= count; n++)
+	{
+		if (codeplugContactGetDataForNumberInType(n, CONTACT_CALLTYPE_PC, &contact) && (contact.tgNumber == DMR_ARS_ID_GET()))
+		{
+			position = n;
+			break;
+		}
+	}
+
+	position = (position + step + count + 1) % (count + 1);
+	arsIdSet(((position != 0) && codeplugContactGetDataForNumberInType(position, CONTACT_CALLTYPE_PC, &contact)) ? contact.tgNumber : 0);
+}
+
+static void arsIdDigit(int digit)
+{
+	uint32_t id = arsIdTyping ? ((DMR_ARS_ID_GET() * 10) + digit) : digit;
+
+	arsIdTyping = true;
+	arsIdSet((id > ARS_ID_MAX) ? digit : id);
+}
+#endif
+
 menuStatus_t menuRadioOptions(uiEvent_t *ev, bool isFirstRun)
 {
 	if (isFirstRun)
@@ -157,6 +203,9 @@ menuStatus_t menuRadioOptions(uiEvent_t *ev, bool isFirstRun)
 		menuDataGlobal.menuOptionsTimeout = 0;
 		menuDataGlobal.newOptionSelected = true;
 		menuDataGlobal.numItems = NUM_RADIO_OPTIONS_MENU_ITEMS;
+#if defined(HAS_DMR_ARS)
+		arsIdTyping = false;
+#endif
 
 		if (originalNonVolatileSettings.magicNumber == 0xDEADBEEF)
 		{
@@ -343,6 +392,25 @@ static void updateScreen(bool isFirstRun)
 							((privacyType() == DMR_PRIVACY_ANYTONE_BP) ? "%04X" : "%u"), nonVolatileSettings.dmrPrivacyKey);
 					break;
 #endif
+#if defined(HAS_DMR_ARS)
+				case RADIO_OPTIONS_MENU_ARS: // registers with the ARS ID (presence server) on power on and channel change
+					leftSide = "ARS";
+					leftSideIsText = true;
+					rightSideConst = (settingsIsOptionBitSet(BIT_DMR_ARS) ? currentLanguage->on : currentLanguage->off);
+					break;
+				case RADIO_OPTIONS_MENU_ARS_ID: // a PC contact's name, else the ID typed
+					leftSide = "ARS ID";
+					leftSideIsText = true;
+					if (DMR_ARS_ID_GET() == 0)
+					{
+						rightSideConst = currentLanguage->none;
+					}
+					else if (arsIdTyping || !contactIDLookup(DMR_ARS_ID_GET(), CONTACT_CALLTYPE_PC, rightSideVar))
+					{
+						snprintf(rightSideVar, SCREEN_LINE_BUFFER_SIZE, "%u", DMR_ARS_ID_GET());
+					}
+					break;
+#endif
 			}
 
 			snprintf(buf, SCREEN_LINE_BUFFER_SIZE, "%s:%s", leftSide, (rightSideVar[0] ? rightSideVar : (rightSideConst ? rightSideConst : "")));
@@ -468,6 +536,9 @@ static void handleEvent(uiEvent_t *ev)
 		{
 			isDirty = true;
 			menuSystemMenuIncrement(&menuDataGlobal.currentItemIndex, NUM_RADIO_OPTIONS_MENU_ITEMS);
+#if defined(HAS_DMR_ARS)
+			arsIdTyping = false;
+#endif
 			menuDataGlobal.newOptionSelected = true;
 			menuOptionsExitCode |= MENU_STATUS_LIST_TYPE;
 		}
@@ -475,6 +546,9 @@ static void handleEvent(uiEvent_t *ev)
 		{
 			isDirty = true;
 			menuSystemMenuDecrement(&menuDataGlobal.currentItemIndex, NUM_RADIO_OPTIONS_MENU_ITEMS);
+#if defined(HAS_DMR_ARS)
+			arsIdTyping = false;
+#endif
 			menuDataGlobal.newOptionSelected = true;
 			menuOptionsExitCode |= MENU_STATUS_LIST_TYPE;
 		}
@@ -625,6 +699,18 @@ static void handleEvent(uiEvent_t *ev)
 					privacyKeyStep(BUTTONCHECK_DOWN(ev, BUTTON_SK2) ? 16 : 1);
 					break;
 #endif
+#if defined(HAS_DMR_ARS)
+				case RADIO_OPTIONS_MENU_ARS:
+					if (settingsIsOptionBitSet(BIT_DMR_ARS) == false)
+					{
+						settingsSetOptionBit(BIT_DMR_ARS, true);
+					}
+					break;
+				case RADIO_OPTIONS_MENU_ARS_ID:
+					arsIdTyping = false;
+					arsIdStep(1);
+					break;
+#endif
 			}
 		}
 		else if (KEYCHECK_PRESS(ev->keys, KEY_LEFT)
@@ -752,6 +838,18 @@ static void handleEvent(uiEvent_t *ev)
 					privacyKeyStep(BUTTONCHECK_DOWN(ev, BUTTON_SK2) ? -16 : -1);
 					break;
 #endif
+#if defined(HAS_DMR_ARS)
+				case RADIO_OPTIONS_MENU_ARS:
+					if (settingsIsOptionBitSet(BIT_DMR_ARS))
+					{
+						settingsSetOptionBit(BIT_DMR_ARS, false);
+					}
+					break;
+				case RADIO_OPTIONS_MENU_ARS_ID:
+					arsIdTyping = false;
+					arsIdStep(-1);
+					break;
+#endif
 			}
 		}
 #if defined(HAS_DMR_PRIVACY)
@@ -761,6 +859,15 @@ static void handleEvent(uiEvent_t *ev)
 			isDirty = true;
 			menuDataGlobal.newOptionSelected = false;
 			privacyKeyDigit(ev->keys.key - '0');
+		}
+#endif
+#if defined(HAS_DMR_ARS)
+		else if (KEYCHECK_SHORTUP_NUMBER(ev->keys) && (BUTTONCHECK_DOWN(ev, BUTTON_SK2) == 0) &&
+				(menuDataGlobal.currentItemIndex == RADIO_OPTIONS_MENU_ARS_ID))
+		{
+			isDirty = true;
+			menuDataGlobal.newOptionSelected = false;
+			arsIdDigit(ev->keys.key - '0');
 		}
 #endif
 		else if ((ev->keys.event & KEY_MOD_PRESS) && (menuDataGlobal.menuOptionsTimeout > 0))

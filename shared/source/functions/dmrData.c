@@ -707,3 +707,52 @@ bool dmrDataDecodeTMS(const uint8_t *payload, int length, dmrDataTMS_t *tms)
 
 	return true;
 }
+
+int dmrDataBuildARSRegistration(uint32_t radioId, uint8_t *out)
+{
+	char digits[8];
+	int n = 0;
+
+	radioId &= 0x00FFFFFF;
+	do
+	{
+		digits[n++] = '0' + (radioId % 10);
+		radioId /= 10;
+	} while (radioId != 0);
+
+	// Header: extension bit, ACK requested, priority, control, type 0. Then its extension: 0x20 as MOTOTRBO sends it
+	out[2] = 0x80 | 0x40 | 0x20 | 0x10 | DMR_ARS_DEVICE_REGISTRATION;
+	out[3] = 0x20;
+	out[4] = n;
+	for (int i = 0; i < n; i++)
+	{
+		out[5 + i] = digits[n - 1 - i];
+	}
+	out[5 + n] = 0;// user ID length
+	out[6 + n] = 0;// password length
+
+	int length = 7 + n;
+	out[0] = (length - 2) >> 8;
+	out[1] = (length - 2) & 0xFF;
+	return length;
+}
+
+int dmrDataBuildARSDeregistration(uint8_t *out)
+{
+	out[0] = 0x00;
+	out[1] = 0x01;
+	out[2] = 0x20 | 0x10 | DMR_ARS_DEVICE_DEREGISTRATION;// priority, control
+	return 3;
+}
+
+int dmrDataDecodeARS(const uint8_t *payload, int length)
+{
+	int pduLength = (payload[0] << 8) | payload[1];
+
+	if ((length < 3) || (pduLength < 1) || ((pduLength + 2) > length) || ((payload[2] & 0x10) == 0))
+	{
+		return -1;// too short, or not a control PDU
+	}
+
+	return payload[2] & 0x0F;
+}

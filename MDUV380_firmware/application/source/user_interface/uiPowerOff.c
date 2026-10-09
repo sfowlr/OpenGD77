@@ -28,6 +28,7 @@
 #include "user_interface/uiGlobals.h"
 #include "user_interface/menuSystem.h"
 #include "user_interface/uiLocalisation.h"
+#include "functions/dmrDataService.h"
 #if defined(PLATFORM_MD9600) || defined(PLATFORM_MD380) || defined(PLATFORM_MDUV380) || defined(PLATFORM_RT84_DM1701) || defined(PLATFORM_MD2017)
 #include "interfaces/batteryAndPowerManagement.h"
 #include "hardware/radioHardwareInterface.h"
@@ -37,6 +38,7 @@ static void updateScreen(void);
 static void handleEvent(uiEvent_t *ev);
 static uint32_t initialEventTime;
 const uint32_t POWEROFF_DURATION_MILLISECONDS = 500;
+const uint32_t POWEROFF_DATA_MAX_MILLISECONDS = 3000; // the longest the ARS deregistration may hold the power off up
 
 menuStatus_t uiPowerOff(uiEvent_t *ev, bool isFirstRun)
 {
@@ -51,6 +53,7 @@ menuStatus_t uiPowerOff(uiEvent_t *ev, bool isFirstRun)
 
 		updateScreen();
 		initialEventTime = ev->time;
+		dmrDataServicePowerOff();// the ARS deregistration starts now, while the screen is up
 	}
 	else
 	{
@@ -93,12 +96,16 @@ static void handleEvent(uiEvent_t *ev)
 	)
 	{
 		// I think this is to handle if the power button is turned back on during shutdown
+		dmrDataServicePowerOffCancelled();
 		menuSystemPopPreviousMenu();
 		initialEventTime = 0; // Reset timeout
 		return;
 	}
 
-	if ((ev->time - initialEventTime) > POWEROFF_DURATION_MILLISECONDS)
+	bool dataPending = dmrDataServicePowerOff();
+
+	if (((ev->time - initialEventTime) > POWEROFF_DURATION_MILLISECONDS) &&
+			(!dataPending || ((ev->time - initialEventTime) > POWEROFF_DATA_MAX_MILLISECONDS)))
 	{
 		powerOffFinalStage(false, false);
 	}

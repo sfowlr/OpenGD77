@@ -139,7 +139,7 @@ typedef enum
 	BIT_POWEROFF_SUSPEND            = (SETTINGS_BITS_BANK_0 | (1 << 8)),
 #endif
 	BIT_SATELLITE_MANUAL_AUTO       = (SETTINGS_BITS_BANK_0 | (1 << 9)),
-	BIT_UNUSED_1                    = (SETTINGS_BITS_BANK_0 | (1 << 10)),
+	BIT_DMR_ARS                     = (SETTINGS_BITS_BANK_0 | (1 << 10)),// Motorola ARS registration with dmrArsId (the old BIT_UNUSED_1)
 #if defined(PLATFORM_MD9600)
 	BIT_SPEAKER_CLICK_SUPPRESS      = (SETTINGS_BITS_BANK_0 | (1 << 11)),
 #endif
@@ -188,6 +188,9 @@ typedef enum
 #define DMR_PRIVACY_SETTING_CONTACT(v)               ((v) >> 3)
 #define DMR_PRIVACY_SETTING(type, contact)           ((uint16_t)(((contact) << 3) | ((type) & 0x07)))
 #endif
+
+#define HAS_DMR_ARS // Motorola ARS registration (dmrDataService.c), BIT_DMR_ARS and dmrArsId
+#define DMR_ARS_ID_GET()                             ((uint32_t)((nonVolatileSettings.dmrArsId[0] << 16) | (nonVolatileSettings.dmrArsId[1] << 8) | nonVolatileSettings.dmrArsId[2]))
 
 #if defined(PLATFORM_MD9600)
 #define RADIO_BANDS_TOTAL_NUM_SQUELCH 2
@@ -278,6 +281,7 @@ typedef struct
 	uint8_t				gpsModeAndBaudsIndex;
 #endif
 	uint8_t				lastTalkerOnScreenTimer; // in seconds, 0..30
+	uint8_t				dmrArsId[3]; // ARS radio ID (presence server), big endian, 0: none. In what was the struct's tail padding, so no settings reset
 } settingsStruct_t;
 
 typedef enum DMR_DESTINATION_FILTER_TYPE

@@ -45,6 +45,16 @@
 												// radio sends a burst every 60 ms, so this is at least one frame with none
 #define CALL_ALERT_REPEAT_MS	10000	// the caller retries until it hears the ack: ring once
 #define CALL_ALERT_SHOW_MS		10000
+// Motorola ARS: registration with the presence server (the "ARS radio ID"), as MOTOTRBO radios do it: 5-15 s after power
+// on (spread by radio ID, so that radios switched on together don't collide), and again once the channel, our ID or the
+// server has been unchanged for ARS_SETTLE_MS. A registration the server doesn't acknowledge is retried ARS_RETRIES times,
+// ARS_RETRY_FIRST_MS apart and doubling (30 s to 8 min), then left until something changes: with no server on the
+// channel, MOTOTRBO radios retry for ever
+#define ARS_POWER_ON_MIN_MS		5000
+#define ARS_POWER_ON_SPREAD_MS	10000
+#define ARS_SETTLE_MS			5000
+#define ARS_RETRY_FIRST_MS		30000
+#define ARS_RETRIES				5
 #if defined(HAS_SOFT_VOLUME)
 #define CALL_ALERT_LOUD_GAIN	16		// HR-C6000 line out gain while the alert rings with BIT_CALL_ALERT_LOUD (knob: -31..31)
 #endif
@@ -107,6 +117,25 @@ static const int16_t MELODY_CALL_ALERT[] = {
 		1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 0, 400,
 		1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50, 1000, 50, 1300, 50,
 		-1, -1 };
+
+#if defined(HAS_DMR_ARS)
+static struct
+{
+	uint32_t seen;							// what to register (arsContext()) as last seen, and since when
+	uint32_t seenSince;
+	uint32_t settleMs;						// how long it must stay unchanged: the power on delay at first
+	uint32_t context;						// what was registered, or is being: 0 nothing
+	uint32_t server;						// the server registered with, deregistered when ARS is switched off
+	uint32_t due;							// the next attempt
+	uint8_t attempts;
+	bool registered;						// the server acknowledged
+	bool deregister;						// a deregistration to the old server is waiting to go
+	uint8_t powerOff;						// ARS_POWER_OFF_xxx: deregistering because the radio is being switched off
+} ars;
+enum { ARS_POWER_OFF_NONE = 0, ARS_POWER_OFF_SENDING, ARS_POWER_OFF_DONE };
+static volatile bool arsAckReceived = false;
+static volatile bool arsQueryReceived = false;
+#endif
 
 DMR_DATA_BUFFER static dmrDataMessage_t inbox[DMR_DATA_INBOX_SIZE];
 static volatile uint8_t inboxNewest = 0;
@@ -275,6 +304,174 @@ static bool channelIsClear(bool isReply)
 	return ((MILLIS() - channelBusyTime) > LBT_CLEAR_MS);
 }
 
+#if defined(HAS_DMR_ARS)
+// The ARS radio ID, 0 when ARS is off. Saved settings only: while an options menu is open its changes aren't, and
+// leaving it with Red puts the saved ones back (originalNonVolatileSettings holds them until then)
+static uint32_t arsServer(void)
+{
+	settingsStruct_t *saved = (originalNonVolatileSettings.magicNumber != 0xDEADBEEF) ? &originalNonVolatileSettings : &nonVolatileSettings;
+
+	if (!settingsIsOptionBitSetFromSettings(saved, BIT_DMR_ARS))
+	{
+		return 0;
+	}
+
+	return (saved->dmrArsId[0] << 16) | (saved->dmrArsId[1] << 8) | saved->dmrArsId[2];
+}
+
+// What a registration is for: the server, our ID and the channel (frequency, timeslot, colour code). 0 when there is
+// nothing to register (ARS off, or a channel we can't send data on)
+static uint32_t arsContext(uint32_t server)
+{
+	if ((server == 0) || !canTransmit())
+	{
+		return 0;
+	}
+
+	uint32_t h = 2166136261u;// FNV-1a
+	uint32_t values[] = { server, trxDMRID, currentChannelData->txFreq, trxGetDMRTimeSlot(), trxGetDMRColourCode() };
+
+	for (unsigned int i = 0; i < (sizeof(values) / sizeof(values[0])); i++)
+	{
+		h = (h ^ values[i]) * 16777619u;
+	}
+
+	return (h != 0) ? h : 1;
+}
+
+static bool arsSend(uint32_t server, bool registration)
+{
+	uint8_t pdu[DMR_ARS_MAX_PDU];
+	int length = registration ? dmrDataBuildARSRegistration(trxDMRID, pdu) : dmrDataBuildARSDeregistration(pdu);
+
+	return queueTx(dmrDataBuildUDP(false, server, trxDMRID, DMR_UDP_PORT_ARS, DMR_UDP_PORT_ARS, pdu, length,
+									DT_RATE_12_DATA, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
+}
+
+static void arsTick(void)
+{
+	if (ars.powerOff != ARS_POWER_OFF_NONE)
+	{
+		return;
+	}
+
+	uint32_t now = MILLIS();
+	uint32_t server = arsServer();
+	uint32_t context = arsContext(server);
+
+	if (ars.settleMs == 0)
+	{
+		ars.settleMs = ARS_POWER_ON_MIN_MS + (((trxDMRID * 2654435761u) ^ now) % ARS_POWER_ON_SPREAD_MS);
+		ars.seen = context;
+		ars.seenSince = now;
+	}
+
+	if (arsAckReceived)
+	{
+		arsAckReceived = false;
+		ars.registered = (ars.context != 0);
+	}
+
+	if (arsQueryReceived)
+	{
+		arsQueryReceived = false;// the server asks us to register again
+		ars.registered = false;
+		ars.attempts = 0;
+		ars.due = now;
+	}
+
+	if (context != ars.seen)
+	{
+		ars.seen = context;
+		ars.seenSince = now;
+	}
+
+	if ((now - ars.seenSince) >= ars.settleMs)
+	{
+		ars.settleMs = ARS_SETTLE_MS;
+
+		if (context != ars.context)
+		{
+			// Switched off, or to another server: say goodbye to the one we registered with (or tried to: a server
+			// that doesn't acknowledge may still be listening). A channel we can't send on (analog, RX only, hotspot)
+			// isn't a reason to, the registration still holds when we come back
+			if ((ars.context != 0) && (server != ars.server) && (ars.registered || (ars.attempts > 0)))
+			{
+				ars.deregister = true;
+			}
+
+			if ((context != 0) || (server != ars.server))
+			{
+				ars.context = context;
+				ars.registered = false;
+				ars.attempts = 0;
+				ars.due = now;
+			}
+		}
+	}
+
+	if (dmrDataServiceIsBusy() || !canTransmit())
+	{
+		return;
+	}
+
+	if (ars.deregister)
+	{
+		ars.deregister = false;
+		arsSend(ars.server, false);
+		return;
+	}
+
+	if ((ars.context != 0) && (ars.context == context) && !ars.registered && (ars.attempts <= ARS_RETRIES) &&
+			((int32_t)(now - ars.due) >= 0) && arsSend(server, true))
+	{
+		ars.server = server;
+		ars.due = now + (ARS_RETRY_FIRST_MS << ars.attempts);
+		ars.attempts++;
+	}
+}
+#endif
+
+// The radio is being switched off (the power off screen, main task): deregister from the ARS server if registered, or
+// tried to. True while the deregistration still has to go out; the caller gives up on it after a while
+bool dmrDataServicePowerOff(void)
+{
+#if defined(HAS_DMR_ARS)
+	if (ars.powerOff == ARS_POWER_OFF_NONE)
+	{
+		if (!(ars.deregister || ((ars.context != 0) && (ars.registered || (ars.attempts > 0)))) || !canTransmit())
+		{
+			ars.powerOff = ARS_POWER_OFF_DONE;
+			return false;
+		}
+
+		if (dmrDataServiceIsBusy())
+		{
+			return true;// after what's already on its way
+		}
+
+		ars.deregister = false;
+		ars.powerOff = arsSend(ars.server, false) ? ARS_POWER_OFF_SENDING : ARS_POWER_OFF_DONE;
+	}
+
+	return (ars.powerOff == ARS_POWER_OFF_SENDING) && dmrDataServiceIsBusy();
+#else
+	return false;
+#endif
+}
+
+// Switched back on before the power off finished: register again if we deregistered
+void dmrDataServicePowerOffCancelled(void)
+{
+#if defined(HAS_DMR_ARS)
+	if (ars.powerOff == ARS_POWER_OFF_SENDING)
+	{
+		ars.context = 0;
+	}
+	ars.powerOff = ARS_POWER_OFF_NONE;
+#endif
+}
+
 void dmrDataServiceTick(void)
 {
 	if (csbkAnswerPending && !dmrDataServiceIsBusy() && canTransmit())
@@ -324,6 +521,10 @@ void dmrDataServiceTick(void)
 		tmsAckPending = false;
 		queueReply(dmrDataBuildTMSAck(tmsAckDst, trxDMRID, tmsAckSeq, DMR_DATA_SMS_PREAMBLES, txBursts, DMR_DATA_MAX_BURSTS));
 	}
+
+#if defined(HAS_DMR_ARS)
+	arsTick();
+#endif
 
 	if (txPending)
 	{
@@ -494,6 +695,24 @@ static void handlePacket(const dmrDataPacket_t *packet)
 	ackDst = packet->src;
 	ackSap = packet->sap;
 	ackSendSeq = packet->sendSeq;
+
+#if defined(HAS_DMR_ARS)
+	// The presence server's answer to our registration, or its request for one
+	if (isUDP && (udp.appPort == DMR_UDP_PORT_ARS) && !packet->group && (packet->src == ars.server))
+	{
+		switch (dmrDataDecodeARS(udp.payload, udp.length))
+		{
+			case DMR_ARS_RESPONSE:
+				arsAckReceived = true;
+				break;
+			case DMR_ARS_QUERY:
+				arsQueryReceived = true;
+				break;
+			default:
+				break;
+		}
+	}
+#endif
 
 	bool isTMS = isUDP && (udp.appPort == DMR_UDP_PORT_TMS) && dmrDataDecodeTMS(udp.payload, udp.length, &tms) && !tms.isAck;
 

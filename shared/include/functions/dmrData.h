@@ -179,4 +179,20 @@ typedef struct
 
 bool dmrDataDecodeTMS(const uint8_t *payload, int length, dmrDataTMS_t *tms);
 
+// Motorola ARS (Automatic Registration Service, UDP 4005): the radio registers with a presence server, the "ARS radio
+// ID". PDU types (the low 4 bits of the header octet)
+#define DMR_ARS_DEVICE_REGISTRATION		0x00
+#define DMR_ARS_DEVICE_DEREGISTRATION	0x01
+#define DMR_ARS_QUERY					0x04		// from the server: register again
+#define DMR_ARS_RESPONSE				0x0F		// from the server: the registration's acknowledgment
+#define DMR_ARS_MAX_PDU					16
+
+// The UDP payloads, as MOTOTRBO sends them. Each returns its length (at most DMR_ARS_MAX_PDU)
+// Registration: 00 LL F0 20 <n> <device ID: the radio ID in decimal, n digits> 00 00 (no user ID, no password)
+int dmrDataBuildARSRegistration(uint32_t radioId, uint8_t *out);
+// Deregistration: 00 01 31
+int dmrDataBuildARSDeregistration(uint8_t *out);
+// The PDU type of an ARS payload (DMR_ARS_xxx), or -1 when it isn't one
+int dmrDataDecodeARS(const uint8_t *payload, int length);
+
 #endif

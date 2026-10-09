@@ -72,8 +72,27 @@ Motorola) use.
 | Application | Support |
 | --- | --- |
 | Motorola TMS text (UDP 4007) | TX with or without an ACK request, unconfirmed Rate 1/2, two preamble CSBKs. RX into a 4 message inbox, UTF-16LE text shown as Latin-1; requested ACKs are sent automatically |
-| LRRP location (UDP 4001), ARS registration (UDP 4005) | carried as UDP (network adapter, `D` UDP send), not decoded by the radio |
+| Motorola ARS registration (UDP 4005) | STM32 radios: Menu > Options > Radio > ARS On / Off and ARS ID (the presence server, MOTOTRBO's "ARS Radio ID": steps through the private call contacts, or type the ID). See below |
+| LRRP location (UDP 4001) | carried as UDP (network adapter, `D` UDP send), not decoded by the radio |
 | ETSI defined short data, Hytera text | not decoded |
+
+ARS (STM32 radios, `BIT_DMR_ARS` and `dmrArsId` in the settings):
+
+- There is no standard destination: every MOTOTRBO radio is programmed with the "ARS Radio ID" of its system's
+  presence server (a control station or MNIS). With no ARS ID set, nothing is sent.
+- Registration `00 LL F0 20 <n> <radio ID in decimal> 00 00` (device registration, ACK requested, no user ID or
+  password), deregistration `00 01 31`, both as unconfirmed private IPv4/UDP 4005 to 4005 at Rate 1/2 with two
+  preambles, through the data service (so listen before talk applies).
+- Sent 5-15 s after power on (spread by radio ID and time), and again once the channel (TX frequency, timeslot,
+  colour code), our ID or the ARS ID has been unchanged for 5 s. A channel the radio can't send data on (analog,
+  RX only, hotspot mode) waits; coming back to the registered channel doesn't register again.
+- The server's response (PDU type 15, e.g. `00 02 BF 01`) stops the retries; a query (type 4) asks for a new
+  registration. Without a response it retries 30 s, 1, 2, 4 and 8 min later (6 tries), then waits for the next
+  change. (MOTOTRBO retries for ever.)
+- Switching ARS off, or to another ARS ID, sends a deregistration to the old server if a registration was sent.
+- Power off (the power knob; not a flat battery): the same deregistration, started as the power off screen comes up.
+  The screen stays up until it is on air, at most 3 s (listen before talk can hold it back). Switched back on before
+  that, the radio registers again.
 
 ## USB serial: `D` commands
 
@@ -213,6 +232,7 @@ The CPS needs the serial port (on the STM32 radios, serial mode).
 | DM-1701: packets built by the radio at Rate 3/4 and Rate 1 (`D` send kinds 1-3) | on air, received by an MMDVM_HS: Rate 3/4 TMS 3 of 3 and UDP, Rate 1 raw packet, CRC-32 good; Rate 1 TMS 1 of 3 (single RF bit errors, Rate 1 has no FEC); rate 3 refused |
 | DM-1701: data RX in normal mode, TMS from an MMDVM_HS (467.375 MHz) | Rate 1/2, Rate 3/4 and Rate 1 to its own ID, into the inbox; group TMS to the selected talkgroup taken, to another talkgroup ignored. Rate 1 needs a clean channel (one bit error loses the packet) |
 | DM-1701 network adapter: ICMP passthrough, `ping` from the host to another radio's address (an MMDVM_HS answering echo requests as ID 9990) | on air, 5 of 5 replies (one more request lost to an RF bit error), about 2.25 s round trip |
+| DM-1701: ARS registration, and deregistration at power off, to RadioDesk (ARS ID 9990100) | on air, shown as on / off in RadioDesk (no ARS response from it, so the retries run) |
 | SCTP passthrough, raw DMR data on UDP 40078 | host tests and RadioDesk's decoder only, not yet on air |
 | Data RX in hotspot mode, confirmed data, the network adapter on Windows and Linux, the MK22 network adapter | not yet on hardware |
 
@@ -232,3 +252,4 @@ to pcaps that are checked with tshark (when Wireshark is installed).
 - SMS compose / inbox screens, storing messages in flash.
 - ETSI defined short data and Hytera text formats.
 - A Wireshark dissector for the monitor records (UDP 40077).
+- ARS: ARS user login, per channel ARS on / off (MOTOTRBO has one), on air testing.

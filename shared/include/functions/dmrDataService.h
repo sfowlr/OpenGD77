@@ -41,6 +41,9 @@ bool dmrDataServiceSendUDP(bool group, uint32_t dst, uint16_t srcPort, uint16_t 
 bool dmrDataServiceSendBursts(const dmrBurst_t *bursts, int count);
 bool dmrDataServiceIsBusy(void);
 void dmrDataServiceTick(void);
+// Power off (main task): true while the ARS deregistration is still going out, call again until it's false
+bool dmrDataServicePowerOff(void);
+void dmrDataServicePowerOffCancelled(void);
 
 // Main task context, for each text message received (a weak no-op unless the platform's UI has one)
 void dmrDataServiceMessageReceived(const dmrDataMessage_t *message);

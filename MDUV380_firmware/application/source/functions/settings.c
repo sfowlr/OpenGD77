@@ -41,6 +41,9 @@
 #include "user_interface/uiUtilities.h"
 
 
+// dmrArsId sits in what was the struct's tail padding: the stored settings must keep their size
+_Static_assert(sizeof(settingsStruct_t) == 0x74, "settingsStruct_t changed size");
+
 #define STORAGE_MAGIC_NUMBER          0x4780 // NOTE: never use 0xDEADBEEF, it's reserved value
 // 0x4780: voxTailUnits member change, [1..11] (0.001s AKA no Vox Tail, 0.5 up to 5.0 seconds, 500ms steps)
 // 0x477F: new gpsModeAndBaudsIndex and lastTalkerOnScreenTimer members, need to ensure lastTalkerOnScreenTimer equal to zero
@@ -417,6 +420,7 @@ bool settingsRestoreDefaultSettings(void)
 #endif
 
 	nonVolatileSettings.lastTalkerOnScreenTimer = 0U;
+	memset(nonVolatileSettings.dmrArsId, 0, sizeof(nonVolatileSettings.dmrArsId));
 
 #if defined(PLATFORM_RD5R)
 	nonVolatileSettings.currentChannelIndexInZone = 0;
